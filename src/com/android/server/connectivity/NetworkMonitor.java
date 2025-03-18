@@ -125,7 +125,6 @@ import android.net.util.DataStallUtils.EvaluationType;
 import android.net.util.Stopwatch;
 import android.net.wifi.WifiInfo;
 import android.net.wifi.WifiManager;
-import android.os.Build;
 import android.os.Bundle;
 import android.os.CancellationSignal;
 import android.os.Message;
@@ -177,7 +176,6 @@ import com.android.networkstack.apishim.common.CaptivePortalDataShim;
 import com.android.networkstack.apishim.common.NetworkAgentConfigShim;
 import com.android.networkstack.apishim.common.NetworkInformationShim;
 import com.android.networkstack.apishim.common.ShimUtils;
-import com.android.networkstack.apishim.common.UnsupportedApiLevelException;
 import com.android.networkstack.metrics.DataStallDetectionStats;
 import com.android.networkstack.metrics.DataStallStatsUtils;
 import com.android.networkstack.metrics.NetworkValidationMetrics;
@@ -477,7 +475,6 @@ public class NetworkMonitor extends StateMachine {
     private final TelephonyManager mTelephonyManager;
     private final WifiManager mWifiManager;
     private final ConnectivityManager mCm;
-    @Nullable
     private final NetworkStackNotifier mNotifier;
     private final IpConnectivityLog mMetricsLog;
     private final Dependencies mDependencies;
@@ -611,13 +608,6 @@ public class NetworkMonitor extends StateMachine {
         } catch (RemoteException e) {
             version = 0;
         }
-        // The AIDL was freezed from Q beta 5 but it's unfreezing from R before releasing. In order
-        // to distinguish the behavior between R and Q beta 5 and before Q beta 5, add SDK and
-        // CODENAME check here. Basically, it's only expected to return 0 for Q beta 4 and below
-        // because the test result has changed.
-        if (Build.VERSION.SDK_INT == Build.VERSION_CODES.Q
-                && Build.VERSION.CODENAME.equals("REL")
-                && version == Build.VERSION_CODES.CUR_DEVELOPMENT) version = 0;
         return version;
     }
 
@@ -1447,7 +1437,7 @@ public class NetworkMonitor extends StateMachine {
                     final CaptivePortalProbeResult probeRes = mLastPortalProbeResult;
                     // Use redirect URL from AP if exists.
                     final String portalUrl =
-                            (useRedirectUrlForPortal() && makeURL(probeRes.redirectUrl) != null)
+                            (makeURL(probeRes.redirectUrl) != null)
                             ? probeRes.redirectUrl : probeRes.detectUrl;
                     appExtras.putString(EXTRA_CAPTIVE_PORTAL_URL, portalUrl);
                     if (probeRes.probeSpec != null) {
@@ -1456,20 +1446,12 @@ public class NetworkMonitor extends StateMachine {
                     }
                     appExtras.putString(ConnectivityManager.EXTRA_CAPTIVE_PORTAL_USER_AGENT,
                             mCaptivePortalUserAgent);
-                    if (mNotifier != null) {
-                        mNotifier.notifyCaptivePortalValidationPending(network);
-                    }
+                    mNotifier.notifyCaptivePortalValidationPending(network);
                     mCm.startCaptivePortalApp(network, appExtras);
                     return HANDLED;
                 default:
                     return NOT_HANDLED;
             }
-        }
-
-        private boolean useRedirectUrlForPortal() {
-            // It must match the conditions in CaptivePortalLogin in which the redirect URL is not
-            // used to validate that the portal is gone.
-            return ShimUtils.isReleaseOrDevelopmentApiAbove(Build.VERSION_CODES.Q);
         }
 
         @Override
@@ -3358,11 +3340,6 @@ public class NetworkMonitor extends StateMachine {
                 return capportData;
             } catch (JSONException e) {
                 validationLog("Could not parse capport API JSON: " + e.getMessage());
-                return null;
-            } catch (UnsupportedApiLevelException e) {
-                // This should never happen because LinkProperties would not have a capport URL
-                // before R.
-                validationLog("Platform API too low to support capport API");
                 return null;
             }
         }

@@ -15,6 +15,8 @@
  */
 package android.net.apf;
 
+import java.util.List;
+
 /**
  * The class contains the helper method for interacting with native apf code.
  */
@@ -61,9 +63,9 @@ public class ApfJniUtils {
     public static native String[] disassembleApf(byte[] program);
 
     /**
-     * Get the transmitted packet.
+     * Get all transmitted packets.
      */
-    public static native byte[] getTransmittedPacket();
+    public static native List<byte[]> getAllTransmittedPackets();
 
     /**
      * Reset the memory region that stored the transmitted packet.
