@@ -33,20 +33,8 @@ import java.util.Set;
  */
 public final class ApfV4Generator extends ApfV4GeneratorBase<ApfV4Generator> {
 
-    /**
-     * Jump to this label to terminate the program, increment the counter and indicate the packet
-     * should be passed to the AP.
-     */
-    private static final String COUNT_AND_PASS_LABEL = "__COUNT_AND_PASS__";
-
-    /**
-     * Jump to this label to terminate the program, increment counter, and indicate the packet
-     * should be dropped.
-     */
-    private static final String COUNT_AND_DROP_LABEL = "__COUNT_AND_DROP__";
-
-    public final String mCountAndDropLabel;
-    public final String mCountAndPassLabel;
+    public final short mCountAndDropLabel;
+    public final short mCountAndPassLabel;
 
     /**
      * Returns true if we support the specified {@code version}, otherwise false.
@@ -65,8 +53,8 @@ public final class ApfV4Generator extends ApfV4GeneratorBase<ApfV4Generator> {
             throws IllegalInstructionException {
         // make sure mVersion is not greater than 4 when using this class
         super(version > 4 ? 4 : version, ramSize, clampSize, disableCounterRangeCheck);
-        mCountAndDropLabel = version > 2 ? COUNT_AND_DROP_LABEL : DROP_LABEL;
-        mCountAndPassLabel = version > 2 ? COUNT_AND_PASS_LABEL : PASS_LABEL;
+        mCountAndDropLabel = version > 2 ? getUniqueLabel() : DROP_LABEL;
+        mCountAndPassLabel = version > 2 ? getUniqueLabel() : PASS_LABEL;
     }
 
     /**
@@ -77,6 +65,11 @@ public final class ApfV4Generator extends ApfV4GeneratorBase<ApfV4Generator> {
     public ApfV4Generator(int version, int ramSize, int clampSize)
             throws IllegalInstructionException {
         this(version, ramSize, clampSize, false);
+    }
+
+    @Override
+    public int getBaseProgramSize() {
+        return 0;
     }
 
     @Override
@@ -236,7 +229,7 @@ public final class ApfV4Generator extends ApfV4GeneratorBase<ApfV4Generator> {
         if (values.isEmpty()) {
             throw new IllegalArgumentException("values cannot be empty");
         }
-        String tgt = getUniqueLabel();
+        short tgt = getUniqueLabel();
         for (Long v : values) {
             addJumpIfR0Equals(v, tgt);
         }
@@ -251,7 +244,7 @@ public final class ApfV4Generator extends ApfV4GeneratorBase<ApfV4Generator> {
         if (values.isEmpty()) {
             throw new IllegalArgumentException("values cannot be empty");
         }
-        String tgt = getUniqueLabel();
+        short tgt = getUniqueLabel();
         for (Long v : values) {
             addJumpIfR0Equals(v, tgt);
         }
@@ -265,10 +258,10 @@ public final class ApfV4Generator extends ApfV4GeneratorBase<ApfV4Generator> {
             throws IllegalInstructionException {
         final List<byte[]> deduplicatedList = validateDeduplicateBytesList(bytesList);
         maybeAddLoadCounterOffset(R1, cnt);
-        String matchLabel = getUniqueLabel();
-        String allNoMatchLabel = getUniqueLabel();
+        short matchLabel = getUniqueLabel();
+        short allNoMatchLabel = getUniqueLabel();
         for (byte[] v : deduplicatedList) {
-            String notMatchLabel = getUniqueLabel();
+            short notMatchLabel = getUniqueLabel();
             addJumpIfBytesAtR0NotEqual(v, notMatchLabel);
             addJump(matchLabel);
             defineLabel(notMatchLabel);
@@ -356,6 +349,18 @@ public final class ApfV4Generator extends ApfV4GeneratorBase<ApfV4Generator> {
         return maybeAddLoadCounterOffset(register.other(), counter).addStoreData(register, 0);
     }
 
+    @Override
+    public ApfV4Generator addAdd(long val) {
+        if (val == 0) return self();  // nop, as APFv6 would '+= R1'
+        return append(new Instruction(Opcodes.ADD).addTwosCompUnsigned(val));
+    }
+
+    @Override
+    public ApfV4Generator addAnd(long val) {
+        if (val == 0) return addLoadImmediate(R0, 0);  // equivalent, as APFv6 would '+= R1'
+        return append(new Instruction(Opcodes.AND).addTwosCompUnsigned(val));
+    }
+
     /**
      * Append the count & (pass|drop) trampoline, which increments the counter at the data address
      * pointed to by R1, then jumps to the (pass|drop) label. This saves a few bytes over inserting
@@ -367,16 +372,32 @@ public final class ApfV4Generator extends ApfV4GeneratorBase<ApfV4Generator> {
     @Override
     public ApfV4Generator addCountTrampoline() throws IllegalInstructionException {
         if (mVersion <= 2) return self();
-        return defineLabel(COUNT_AND_PASS_LABEL)
+        return defineLabel(mCountAndPassLabel)
                 .addLoadData(R0, 0)  // R0 = *(R1 + 0)
                 .addAdd(1)           // R0++
                 .addStoreData(R0, 0) // *(R1 + 0) = R0
                 .addJump(PASS_LABEL)
-                .defineLabel(COUNT_AND_DROP_LABEL)
+                .defineLabel(mCountAndDropLabel)
                 .addLoadData(R0, 0)  // R0 = *(R1 + 0)
                 .addAdd(1)           // R0++
                 .addStoreData(R0, 0) // *(R1 + 0) = R0
                 .addJump(DROP_LABEL);
+    }
+
+    @Override
+    public int getDefaultPacketHandlingSizeOverEstimate() {
+        // addCountAndPass(PASSED_IPV6_ICMP); -> 7 bytes
+        // defineLabel(mCountAndPassLabel)
+        // .addLoadData(R0, 0) ->  1 bytes
+        // .addAdd(1) -> 2 bytes
+        // .addStoreData(R0, 0) -> 1 bytes
+        // .addJump(PASS_LABEL) -> 5 bytes
+        // .defineLabel(mCountAndDropLabel)
+        // .addLoadData(R0, 0) -> 1 bytes
+        // .addAdd(1) -> 2 bytes
+        // .addStoreData(R0, 0) -> 1 bytes
+        // .addJump(DROP_LABEL); -> 5 bytes
+        return 25;
     }
 
     /**

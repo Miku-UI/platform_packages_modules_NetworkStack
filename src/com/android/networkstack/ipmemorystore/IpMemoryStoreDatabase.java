@@ -471,21 +471,24 @@ public class IpMemoryStoreDatabase {
         final ContentValues cv = toContentValues(key, attributes, expiry);
         db.beginTransaction();
         try {
-            // Unfortunately SQLite does not have any way to do INSERT OR UPDATE. Options are
-            // to either insert with on conflict ignore then update (like done here), or to
-            // construct a custom SQL INSERT statement with nested select.
-            final long resultId = db.insertWithOnConflict(NetworkAttributesContract.TABLENAME,
-                    null, cv, SQLiteDatabase.CONFLICT_IGNORE);
-            if (resultId < 0) {
-                db.update(NetworkAttributesContract.TABLENAME, cv, SELECT_L2KEY, new String[]{key});
+            try {
+                // Unfortunately SQLite does not have any way to do INSERT OR UPDATE. Options are
+                // to either insert with on conflict ignore then update (like done here), or to
+                // construct a custom SQL INSERT statement with nested select.
+                final long resultId = db.insertWithOnConflict(NetworkAttributesContract.TABLENAME,
+                        null, cv, SQLiteDatabase.CONFLICT_IGNORE);
+                if (resultId < 0) {
+                    db.update(NetworkAttributesContract.TABLENAME,
+                            cv, SELECT_L2KEY, new String[]{key});
+                }
+                db.setTransactionSuccessful();
+                return Status.SUCCESS;
+            } finally {
+                db.endTransaction();
             }
-            db.setTransactionSuccessful();
-            return Status.SUCCESS;
         } catch (SQLiteException e) {
             // No space left on disk or something
             Log.e(TAG, "Could not write to the memory store", e);
-        } finally {
-            db.endTransaction();
         }
         return Status.ERROR_STORAGE;
     }
@@ -548,53 +551,55 @@ public class IpMemoryStoreDatabase {
         for (int remainingRetries = 3; remainingRetries > 0; --remainingRetries) {
             db.beginTransaction();
             try {
-                db.delete(NetworkAttributesContract.TABLENAME, null, null);
-                db.delete(PrivateDataContract.TABLENAME, null, null);
-                db.delete(NetworkEventsContract.TABLENAME, null, null);
-                try (Cursor cursorNetworkAttributes = db.query(
-                        // table name
-                        NetworkAttributesContract.TABLENAME,
-                        // column name
-                        new String[] { NetworkAttributesContract.COLNAME_L2KEY },
-                        null, // selection
-                        null, // selectionArgs
-                        null, // groupBy
-                        null, // having
-                        null, // orderBy
-                        "1")) { // limit
-                    if (0 != cursorNetworkAttributes.getCount()) continue;
+                try {
+                    db.delete(NetworkAttributesContract.TABLENAME, null, null);
+                    db.delete(PrivateDataContract.TABLENAME, null, null);
+                    db.delete(NetworkEventsContract.TABLENAME, null, null);
+                    try (Cursor cursorNetworkAttributes = db.query(
+                            // table name
+                            NetworkAttributesContract.TABLENAME,
+                            // column name
+                            new String[] { NetworkAttributesContract.COLNAME_L2KEY },
+                            null, // selection
+                            null, // selectionArgs
+                            null, // groupBy
+                            null, // having
+                            null, // orderBy
+                            "1")) { // limit
+                        if (0 != cursorNetworkAttributes.getCount()) continue;
+                    }
+                    try (Cursor cursorPrivateData = db.query(
+                            // table name
+                            PrivateDataContract.TABLENAME,
+                            // column name
+                            new String[] { PrivateDataContract.COLNAME_L2KEY },
+                            null, // selection
+                            null, // selectionArgs
+                            null, // groupBy
+                            null, // having
+                            null, // orderBy
+                            "1")) { // limit
+                        if (0 != cursorPrivateData.getCount()) continue;
+                    }
+                    try (Cursor cursorNetworkEvents = db.query(
+                            // table name
+                            NetworkEventsContract.TABLENAME,
+                            // column name
+                            new String[] { NetworkEventsContract.COLNAME_CLUSTER },
+                            null, // selection
+                            null, // selectionArgs
+                            null, // groupBy
+                            null, // having
+                            null, // orderBy
+                            "1")) { // limit
+                        if (0 != cursorNetworkEvents.getCount()) continue;
+                    }
+                    db.setTransactionSuccessful();
+                } finally {
+                    db.endTransaction();
                 }
-                try (Cursor cursorPrivateData = db.query(
-                        // table name
-                        PrivateDataContract.TABLENAME,
-                        // column name
-                        new String[] { PrivateDataContract.COLNAME_L2KEY },
-                        null, // selection
-                        null, // selectionArgs
-                        null, // groupBy
-                        null, // having
-                        null, // orderBy
-                        "1")) { // limit
-                    if (0 != cursorPrivateData.getCount()) continue;
-                }
-                try (Cursor cursorNetworkEvents = db.query(
-                        // table name
-                        NetworkEventsContract.TABLENAME,
-                        // column name
-                        new String[] { NetworkEventsContract.COLNAME_CLUSTER },
-                        null, // selection
-                        null, // selectionArgs
-                        null, // groupBy
-                        null, // having
-                        null, // orderBy
-                        "1")) { // limit
-                    if (0 != cursorNetworkEvents.getCount()) continue;
-                }
-                db.setTransactionSuccessful();
             } catch (SQLiteException e) {
                 Log.e(TAG, "Could not wipe the data in database", e);
-            } finally {
-                db.endTransaction();
             }
         }
     }
@@ -714,6 +719,10 @@ public class IpMemoryStoreDatabase {
     /**
      * Delete a single entry by key.
      *
+     * The NetworkAttributes table is indexed by a L2 key although it also has a cluster column,
+     * so this API only targets the NetworkAttributes table. For deleting the entries by cluster,
+     * see {@link deleteCluster}.
+     *
      * If |needWipe| is true, the data will be wiped from disk immediately. Otherwise, it will
      * only be marked deleted, and overwritten by subsequent writes or reclaimed during the next
      * maintenance window.
@@ -724,11 +733,21 @@ public class IpMemoryStoreDatabase {
     static StatusAndCount delete(@NonNull final SQLiteDatabase db, @NonNull final String l2key,
             final boolean needWipe) {
         return deleteEntriesWithColumn(db,
-                NetworkAttributesContract.COLNAME_L2KEY, l2key, needWipe);
+                NetworkAttributesContract.TABLENAME,     // table
+                NetworkAttributesContract.COLNAME_L2KEY, // column
+                l2key,                                   // value
+                needWipe);
     }
 
     /**
-     * Delete all entries that have a particular cluster value.
+     * Delete all entries that have a particular cluster value in NetworkAttributes and
+     * NetworkEvents tables.
+     *
+     * So far the cluster column exists in both the NetworkAttributes and NetworkEvents
+     * tables, and this API is only called when WiFi attempts to remove a network, see
+     * {@link WifiHealthMonitor.OnNetworkUpdateListener#onNetworkRemoved} and
+     * {@link WifiNetworkSuggestionManager#remove}. It makes more sense to delete the
+     * cluster column from both tables when this API is called.
      *
      * If |needWipe| is true, the data will be wiped from disk immediately. Otherwise, it will
      * only be marked deleted, and overwritten by subsequent writes or reclaimed during the next
@@ -739,26 +758,50 @@ public class IpMemoryStoreDatabase {
      */
     static StatusAndCount deleteCluster(@NonNull final SQLiteDatabase db,
             @NonNull final String cluster, final boolean needWipe) {
-        return deleteEntriesWithColumn(db,
-                NetworkAttributesContract.COLNAME_CLUSTER, cluster, needWipe);
+        // Delete all entries that have cluster value from NetworkAttributes table.
+        final StatusAndCount naDeleteResult = deleteEntriesWithColumn(db,
+                NetworkAttributesContract.TABLENAME,       // table
+                NetworkAttributesContract.COLNAME_CLUSTER, // column
+                cluster,                                   // value
+                needWipe);
+        // And then delete all entries that have cluster value from NetworkEvents table.
+        final StatusAndCount neDeleteResult = deleteEntriesWithColumn(db,
+                NetworkEventsContract.TABLENAME,           // table
+                NetworkEventsContract.COLNAME_CLUSTER,     // column
+                cluster,                                   // value
+                needWipe);
+        int status = Status.ERROR_GENERIC;
+        if (naDeleteResult.status == Status.SUCCESS && neDeleteResult.status == Status.SUCCESS) {
+            status = Status.SUCCESS;
+        } else if (naDeleteResult.status != Status.SUCCESS) {
+            // If deleteCluster fails on both tables, return the status code on deleting the entries
+            // from the NetworkAttributes table, keep consistent with previous behavior.
+            status = naDeleteResult.status;
+        } else {
+            status = neDeleteResult.status;
+        }
+        return new StatusAndCount(status, naDeleteResult.count + neDeleteResult.count);
     }
 
     // Delete all entries where the given column has the given value.
     private static StatusAndCount deleteEntriesWithColumn(@NonNull final SQLiteDatabase db,
-            @NonNull final String column, @NonNull final String value, final boolean needWipe) {
+            @NonNull final String table, @NonNull final String column, @NonNull final String value,
+            final boolean needWipe) {
         db.beginTransaction();
         int deleted = 0;
         try {
-            deleted = db.delete(NetworkAttributesContract.TABLENAME,
-                    column + "= ?", new String[] { value });
-            db.setTransactionSuccessful();
+            try {
+                deleted = db.delete(table,
+                        column + "= ?", new String[] { value });
+                db.setTransactionSuccessful();
+            } finally {
+                db.endTransaction();
+            }
         } catch (SQLiteException e) {
             Log.e(TAG, "Could not delete from the memory store", e);
             // Unclear what might have happened ; deleting records is not supposed to be able
             // to fail barring a syntax error in the SQL query.
             return new StatusAndCount(Status.ERROR_UNKNOWN, 0);
-        } finally {
-            db.endTransaction();
         }
 
         if (needWipe) {
@@ -774,21 +817,23 @@ public class IpMemoryStoreDatabase {
     static int dropAllExpiredRecords(@NonNull final SQLiteDatabase db) {
         db.beginTransaction();
         try {
-            final long currentTimestamp = System.currentTimeMillis();
-            // Deletes NetworkAttributes that have expired.
-            db.delete(NetworkAttributesContract.TABLENAME,
-                    NetworkAttributesContract.COLNAME_EXPIRYDATE + " < ?",
-                    new String[]{Long.toString(currentTimestamp)});
-            // Deletes NetworkEvents that have expired.
-            db.delete(NetworkEventsContract.TABLENAME,
-                    NetworkEventsContract.COLNAME_EXPIRY + " < ?",
-                    new String[]{Long.toString(currentTimestamp)});
-            db.setTransactionSuccessful();
+            try {
+                final long currentTimestamp = System.currentTimeMillis();
+                // Deletes NetworkAttributes that have expired.
+                db.delete(NetworkAttributesContract.TABLENAME,
+                        NetworkAttributesContract.COLNAME_EXPIRYDATE + " < ?",
+                        new String[]{Long.toString(currentTimestamp)});
+                // Deletes NetworkEvents that have expired.
+                db.delete(NetworkEventsContract.TABLENAME,
+                        NetworkEventsContract.COLNAME_EXPIRY + " < ?",
+                        new String[]{Long.toString(currentTimestamp)});
+                db.setTransactionSuccessful();
+            } finally {
+                db.endTransaction();
+            }
         } catch (SQLiteException e) {
             Log.e(TAG, "Could not delete data from memory store", e);
             return Status.ERROR_STORAGE;
-        } finally {
-            db.endTransaction();
         }
 
         // Execute vacuuming here if above operation has no exception. If above operation got
@@ -827,16 +872,18 @@ public class IpMemoryStoreDatabase {
 
         db.beginTransaction();
         try {
-            // Deletes NetworkAttributes that expiryDate are lower than given value.
-            db.delete(NetworkAttributesContract.TABLENAME,
-                    NetworkAttributesContract.COLNAME_EXPIRYDATE + " <= ?",
-                    new String[]{Long.toString(expiryDate)});
-            db.setTransactionSuccessful();
+            try {
+                // Deletes NetworkAttributes that expiryDate are lower than given value.
+                db.delete(NetworkAttributesContract.TABLENAME,
+                        NetworkAttributesContract.COLNAME_EXPIRYDATE + " <= ?",
+                        new String[]{Long.toString(expiryDate)});
+                db.setTransactionSuccessful();
+            } finally {
+                db.endTransaction();
+            }
         } catch (SQLiteException e) {
             Log.e(TAG, "Could not delete data from memory store", e);
             return Status.ERROR_STORAGE;
-        } finally {
-            db.endTransaction();
         }
 
         // Execute vacuuming here if above operation has no exception. If above operation got
@@ -868,20 +915,22 @@ public class IpMemoryStoreDatabase {
         final ContentValues cv = toContentValues(cluster, timestamp, expiry, eventType);
         db.beginTransaction();
         try {
-            final long resultId = db.insertOrThrow(NetworkEventsContract.TABLENAME,
-                    null /* nullColumnHack */, cv);
-            if (resultId < 0) {
-                // Should not fail to insert a row to NetworkEvents table which doesn't have
-                // uniqueness constraint.
-                return Status.ERROR_STORAGE;
+            try {
+                final long resultId = db.insertOrThrow(NetworkEventsContract.TABLENAME,
+                        null /* nullColumnHack */, cv);
+                if (resultId < 0) {
+                    // Should not fail to insert a row to NetworkEvents table which doesn't have
+                    // uniqueness constraint.
+                    return Status.ERROR_STORAGE;
+                }
+                db.setTransactionSuccessful();
+                return Status.SUCCESS;
+            } finally {
+                db.endTransaction();
             }
-            db.setTransactionSuccessful();
-            return Status.SUCCESS;
         } catch (SQLiteException e) {
             // No space left on disk or something
             Log.e(TAG, "Could not write to the memory store", e);
-        } finally {
-            db.endTransaction();
         }
         return Status.ERROR_STORAGE;
     }

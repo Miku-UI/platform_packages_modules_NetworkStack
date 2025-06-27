@@ -517,6 +517,8 @@ public class NetworkMonitor extends StateMachine {
     private final boolean mIsCaptivePortalCheckEnabled;
 
     private boolean mUseHttps;
+    private final boolean mUseSerialProbe;
+    private final int mSerialProbeGapTime;
     /**
      * The total number of completed validation attempts (network validated or a captive portal was
      * detected) for this NetworkMonitor instance.
@@ -679,6 +681,8 @@ public class NetworkMonitor extends StateMachine {
                 && deps.isFeatureSupported(mContext, FEATURE_DDR_IN_CONNECTIVITY)
                 && deps.isFeatureSupported(mContext, FEATURE_DDR_IN_DNSRESOLVER);
         mUseHttps = getUseHttpsValidation();
+        mUseSerialProbe = getUseSerialProbeValidation();
+        mSerialProbeGapTime = getSerialProbeGapTime();
         mCaptivePortalUserAgent = getCaptivePortalUserAgent();
         mCaptivePortalFallbackSpecs =
                 makeCaptivePortalFallbackProbeSpecs(getCustomizedContextOrDefault());
@@ -879,7 +883,8 @@ public class NetworkMonitor extends StateMachine {
             } else {
                 mCallback.notifyNetworkTestedWithExtras(result);
             }
-        } catch (RemoteException e) {
+        } catch (RemoteException | RuntimeException e) {
+            // TODO: stop catching RuntimeException once all mainline devices use the tethering APEX
             Log.e(TAG, "Error sending network test result", e);
         }
     }
@@ -910,7 +915,8 @@ public class NetworkMonitor extends StateMachine {
     private void notifyProbeStatusChanged(int probesCompleted, int probesSucceeded) {
         try {
             mCallback.notifyProbeStatusChanged(probesCompleted, probesSucceeded);
-        } catch (RemoteException e) {
+        } catch (RemoteException | RuntimeException e) {
+            // TODO: stop catching RuntimeException once all mainline devices use the tethering APEX
             Log.e(TAG, "Error sending probe status", e);
         }
     }
@@ -918,7 +924,8 @@ public class NetworkMonitor extends StateMachine {
     private void showProvisioningNotification(String action) {
         try {
             mCallback.showProvisioningNotification(action, mContext.getPackageName());
-        } catch (RemoteException e) {
+        } catch (RemoteException | RuntimeException e) {
+            // TODO: stop catching RuntimeException once all mainline devices use the tethering APEX
             Log.e(TAG, "Error showing provisioning notification", e);
         }
     }
@@ -926,7 +933,8 @@ public class NetworkMonitor extends StateMachine {
     private void hideProvisioningNotification() {
         try {
             mCallback.hideProvisioningNotification();
-        } catch (RemoteException e) {
+        } catch (RemoteException | RuntimeException e) {
+            // TODO: stop catching RuntimeException once all mainline devices use the tethering APEX
             Log.e(TAG, "Error hiding provisioning notification", e);
         }
     }
@@ -934,7 +942,8 @@ public class NetworkMonitor extends StateMachine {
     private void notifyDataStallSuspected(@NonNull DataStallReportParcelable p) {
         try {
             mCallback.notifyDataStallSuspected(p);
-        } catch (RemoteException e) {
+        } catch (RemoteException | RuntimeException e) {
+            // TODO: stop catching RuntimeException once all mainline devices use the tethering APEX
             Log.e(TAG, "Error sending notification for suspected data stall", e);
         }
     }
@@ -2085,7 +2094,8 @@ public class NetworkMonitor extends StateMachine {
     private void notifyPrivateDnsConfigResolved(@NonNull PrivateDnsConfig config) {
         try {
             mCallback.notifyPrivateDnsConfigResolved(config.toParcel());
-        } catch (RemoteException e) {
+        } catch (RemoteException | RuntimeException e) {
+            // TODO: stop catching RuntimeException once all mainline devices use the tethering APEX
             Log.e(TAG, "Error sending private DNS config resolved notification", e);
         }
     }
@@ -2384,6 +2394,16 @@ public class NetworkMonitor extends StateMachine {
         return mDependencies.isFeatureEnabled(mContext, DNS_PROBE_PRIVATE_IP_NO_INTERNET_VERSION)
                 || mContext.getResources().getBoolean(
                         R.bool.config_force_dns_probe_private_ip_no_internet);
+    }
+
+    private boolean getUseSerialProbeValidation() {
+        return mContext.getResources().getBoolean(
+                R.bool.config_probe_multi_http_https_url_serial);
+    }
+
+    private int getSerialProbeGapTime() {
+        return mContext.getResources().getInteger(
+                R.integer.config_serial_url_probe_gap_time);
     }
 
     private boolean getUseHttpsValidation() {
@@ -3420,14 +3440,26 @@ public class NetworkMonitor extends StateMachine {
             // Probe capport API with the first HTTP probe.
             // TODO: Have the capport probe as a different probe for cleanliness.
             final URL urlMaybeWithCapport = httpUrls[0];
+            int delayCount=0;
             for (final URL url : httpUrls) {
-                futures.add(ecs.submit(() -> new HttpProbe(properties, proxy, url,
-                        url.equals(urlMaybeWithCapport) ? capportApiUrl : null).sendProbe()));
+                final int cnt = delayCount++;
+                futures.add(ecs.submit(() -> {
+                    if (mUseSerialProbe && cnt > 0) {
+                        mDependencies.sleep(mSerialProbeGapTime * cnt);
+                    }
+                    return new HttpProbe(properties, proxy, url,
+                            url.equals(urlMaybeWithCapport) ? capportApiUrl : null).sendProbe();
+                }));
             }
-
+            delayCount=0;
             for (final URL url : httpsUrls) {
-                futures.add(ecs.submit(() -> new HttpsProbe(properties, proxy, url, capportApiUrl)
-                        .sendProbe()));
+                final int cnt = delayCount++;
+                futures.add(ecs.submit(() -> {
+                    if (mUseSerialProbe && cnt > 0) {
+                        mDependencies.sleep(mSerialProbeGapTime * cnt);
+                    }
+                    return new HttpsProbe(properties, proxy, url, capportApiUrl).sendProbe();
+                }));
             }
 
             final ArrayList<CaptivePortalProbeResult> completedProbes = new ArrayList<>();
@@ -3770,6 +3802,13 @@ public class NetworkMonitor extends StateMachine {
          * created threads and waits for the termination.
          */
         public void onExecutorServiceCreated(@NonNull ExecutorService ecs) {
+        }
+
+        /**
+         * Wait for another round of serial probe
+         */
+        public void sleep(int time) throws InterruptedException {
+            Thread.sleep((long)time);
         }
 
         public static final Dependencies DEFAULT = new Dependencies();
@@ -4121,7 +4160,8 @@ public class NetworkMonitor extends StateMachine {
         if (data == null) return;
         try {
             data.notifyChanged(mCallback);
-        } catch (RemoteException e) {
+        } catch (RemoteException | RuntimeException e) {
+            // TODO: stop catching RuntimeException once all mainline devices use the tethering APEX
             Log.e(TAG, "Error notifying ConnectivityService of new capport data", e);
         }
     }

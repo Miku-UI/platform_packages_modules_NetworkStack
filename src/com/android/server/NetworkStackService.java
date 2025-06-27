@@ -107,9 +107,6 @@ public class NetworkStackService extends Service {
 
     /**
      * Create a binder connector for the system server to communicate with the network stack.
-     *
-     * <p>On platforms where the network stack runs in the system server process, this method may
-     * be called directly instead of obtaining the connector by binding to the service.
      */
     public static synchronized IBinder makeConnector(Context context) {
         if (sConnector == null) {
@@ -364,8 +361,8 @@ public class NetworkStackService extends Service {
         }
 
         @Override
-        public void makeNetworkMonitor(Network network, String name, INetworkMonitorCallbacks cb)
-                throws RemoteException {
+        public void makeNetworkMonitor(Network network, @Nullable String name,
+                INetworkMonitorCallbacks cb) throws RemoteException {
             mPermChecker.enforceNetworkStackCallingPermission();
             updateNetworkStackAidlVersion(cb.getInterfaceVersion(), cb.getInterfaceHash());
             final SharedLog log = addValidationLogs(network, name);

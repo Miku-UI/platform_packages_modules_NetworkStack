@@ -23,6 +23,7 @@ import com.android.testutils.FunctionalUtils.ThrowingSupplier
 import com.android.testutils.assertThrows
 import com.android.testutils.visibleOnHandlerThread
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 import org.junit.After
 import org.junit.Before
@@ -36,7 +37,7 @@ import org.mockito.Mockito.doReturn
 import org.mockito.Mockito.mock
 import org.mockito.Mockito.timeout
 import org.mockito.Mockito.verify
-import org.mockito.Mockito.verifyZeroInteractions
+import org.mockito.Mockito.verifyNoMoreInteractions
 
 /**
  * Test for RawPacketTracker.
@@ -100,7 +101,9 @@ class RawPacketTrackerTest {
         // stop capturing
         stopCaptureOnHandler(ifaceName)
         verifySetCapture(false, 1)
-        verifyZeroInteractions(tracker)
+
+        assertFalse(rawTracker.handler.hasMessages(RawPacketTracker.CMD_STOP_CAPTURE))
+        verifyNoMoreInteractions(tracker)
     }
 
     @Test
@@ -129,7 +132,7 @@ class RawPacketTrackerTest {
         }
 
         verifySetCapture(false, 0)
-        verifyZeroInteractions(tracker)
+        verifyNoMoreInteractions(tracker)
     }
 
     @Test
@@ -166,7 +169,8 @@ class RawPacketTrackerTest {
     }
 
     private fun startCaptureOnHandler(
-        ifaceName: String, maxCaptureTime: Long = TEST_MAX_CAPTURE_TIME_MS
+        ifaceName: String,
+        maxCaptureTime: Long = TEST_MAX_CAPTURE_TIME_MS
     ) {
         visibleOnHandlerThread(rawTracker.handler) {
             rawTracker.startCapture(ifaceName, maxCaptureTime)
@@ -174,8 +178,10 @@ class RawPacketTrackerTest {
     }
 
     private fun stopCaptureOnHandler(ifaceName: String) {
+        // always create new instance to validate removal of duplicated CMD_STOP_CAPTURE messages
+        val ifaceNameCloned = String(ifaceName.toCharArray())
         visibleOnHandlerThread(rawTracker.handler) {
-            rawTracker.stopCapture(ifaceName)
+            rawTracker.stopCapture(ifaceNameCloned)
         }
     }
 

@@ -27,6 +27,7 @@ import android.net.nsd.OffloadServiceInfo;
 import android.os.Build;
 import android.util.ArraySet;
 
+import com.android.net.module.util.CollectionUtils;
 import com.android.net.module.util.DnsUtils;
 
 import java.io.ByteArrayOutputStream;
@@ -56,14 +57,6 @@ public class ApfMdnsUtils {
         allMatchers.add(matcher);
     }
 
-    private static String[] prepend(String[] suffix, String... prefixes) {
-        String[] result = new String[prefixes.length + suffix.length];
-        System.arraycopy(prefixes, 0, result, 0, prefixes.length);
-        System.arraycopy(suffix, 0, result, prefixes.length, suffix.length);
-        return result;
-    }
-
-
     /**
      * Extract the offload rules from the list of offloadServiceInfos. The rules are returned in
      * priority order (most important first). If there are too many rules, APF could decide only
@@ -83,21 +76,18 @@ public class ApfMdnsUtils {
         final List<MdnsOffloadRule> rules = new ArrayList<>();
         final Set<MdnsOffloadRule.Matcher> allMatchers = new ArraySet<>();
         for (OffloadServiceInfo info : sortedOffloadServiceInfos) {
-            // Don't offload the records if the priority is not configured.
-            int priority = info.getPriority();
-            if (priority == Integer.MAX_VALUE) {
-                continue;
-            }
             List<MdnsOffloadRule.Matcher> matcherGroup = new ArrayList<>();
             final OffloadServiceInfo.Key key = info.getKey();
-            final String[] serviceTypeLabels = key.getServiceType().split("\\.", 0);
-            final String[] fullQualifiedName = prepend(serviceTypeLabels, key.getServiceName());
+            final String[] serviceTypeLabels = CollectionUtils.appendArray(String.class,
+                    key.getServiceType().split("\\.", 0), "local");
+            final String[] fullQualifiedName = CollectionUtils.prependArray(String.class,
+                    serviceTypeLabels, key.getServiceName());
             final byte[] replyPayload = info.getOffloadPayload();
             final byte[] encodedServiceType = encodeQname(serviceTypeLabels);
            // If (QTYPE == PTR) and (QNAME == mServiceName + mServiceType), then reply.
             MdnsOffloadRule.Matcher ptrMatcher = new MdnsOffloadRule.Matcher(
                     encodedServiceType,
-                    TYPE_PTR
+                    new int[] { TYPE_PTR }
             );
             addMatcherIfNotExist(allMatchers, matcherGroup, ptrMatcher);
             final List<String> subTypes = info.getSubtypes();
@@ -106,41 +96,43 @@ public class ApfMdnsUtils {
             boolean tooManySubtypes = subTypes.size() > MAX_SUPPORTED_SUBTYPES;
             if (tooManySubtypes) {
                 // If (QTYPE == PTR) and (QNAME == wildcard + _sub + mServiceType), then fail open.
-                final String[] serviceTypeSuffix = prepend(serviceTypeLabels, "_sub");
+                final String[] serviceTypeSuffix = CollectionUtils.prependArray(String.class,
+                        serviceTypeLabels, "_sub");
                 final ByteArrayOutputStream buf = new ByteArrayOutputStream();
                 // byte = 0xff is used as a wildcard.
                 buf.write(-1);
                 final byte[] encodedFullServiceType = encodeQname(buf, serviceTypeSuffix);
                 final MdnsOffloadRule.Matcher subtypePtrMatcher = new MdnsOffloadRule.Matcher(
-                        encodedFullServiceType, TYPE_PTR);
+                        encodedFullServiceType, new int[] { TYPE_PTR });
                 addMatcherIfNotExist(allMatchers, matcherGroup, subtypePtrMatcher);
             } else {
                 // If (QTYPE == PTR) and (QNAME == subType + _sub + mServiceType), then reply.
                 for (String subType : subTypes) {
-                    final String[] fullServiceType = prepend(serviceTypeLabels, subType, "_sub");
+                    final String[] fullServiceType = CollectionUtils.prependArray(String.class,
+                            serviceTypeLabels, subType, "_sub");
                     final byte[] encodedFullServiceType = encodeQname(fullServiceType);
                     // If (QTYPE == PTR) and (QNAME == subType + "_sub" + mServiceType), then reply.
                     final MdnsOffloadRule.Matcher subtypePtrMatcher = new MdnsOffloadRule.Matcher(
-                            encodedFullServiceType, TYPE_PTR);
+                            encodedFullServiceType, new int[] { TYPE_PTR });
                     addMatcherIfNotExist(allMatchers, matcherGroup, subtypePtrMatcher);
                 }
             }
             final byte[] encodedFullQualifiedNameQname = encodeQname(fullQualifiedName);
             // If (QTYPE == SRV) and (QNAME == mServiceName + mServiceType), then reply.
-            addMatcherIfNotExist(allMatchers, matcherGroup,
-                    new MdnsOffloadRule.Matcher(encodedFullQualifiedNameQname, TYPE_SRV));
             // If (QTYPE == TXT) and (QNAME == mServiceName + mServiceType), then reply.
             addMatcherIfNotExist(allMatchers, matcherGroup,
-                    new MdnsOffloadRule.Matcher(encodedFullQualifiedNameQname, TYPE_TXT));
+                    new MdnsOffloadRule.Matcher(encodedFullQualifiedNameQname,
+                            new int[] { TYPE_SRV, TYPE_TXT }));
             // If (QTYPE == A or AAAA) and (QNAME == mDeviceHostName), then reply.
             final String[] hostNameLabels = info.getHostname().split("\\.", 0);
             final byte[] encodedHostName = encodeQname(hostNameLabels);
             addMatcherIfNotExist(allMatchers, matcherGroup,
-                    new MdnsOffloadRule.Matcher(encodedHostName, TYPE_A));
-            addMatcherIfNotExist(allMatchers, matcherGroup,
-                    new MdnsOffloadRule.Matcher(encodedHostName, TYPE_AAAA));
+                    new MdnsOffloadRule.Matcher(encodedHostName,
+                            new int[] { TYPE_A, TYPE_AAAA }));
             if (!matcherGroup.isEmpty()) {
-                rules.add(new MdnsOffloadRule(matcherGroup, tooManySubtypes ? null : replyPayload));
+                rules.add(new MdnsOffloadRule(
+                        key.getServiceName() + "." + key.getServiceType(),
+                        matcherGroup, tooManySubtypes ? null : replyPayload));
             }
         }
         return rules;

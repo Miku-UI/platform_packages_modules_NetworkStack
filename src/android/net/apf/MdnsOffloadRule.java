@@ -41,10 +41,15 @@ public class MdnsOffloadRule {
     @NonNull
     public final List<Matcher> mMatchers;
 
+    @NonNull
+    public final String mFullServiceName;
+
     /**
      * Construct an mDNS offload rule.
      */
-    public MdnsOffloadRule(@NonNull List<Matcher> matchers, @Nullable byte[] offloadPayload) {
+    public MdnsOffloadRule(@NonNull String fullServiceName, @NonNull List<Matcher> matchers,
+            @Nullable byte[] offloadPayload) {
+        mFullServiceName = fullServiceName;
         mMatchers = matchers;
         mOffloadPayload = offloadPayload;
     }
@@ -86,34 +91,32 @@ public class MdnsOffloadRule {
         /**
          * The QTYPE from the mDNS query that this rule matches.
          */
-        public final int mQtype;
+        public final int[] mQtypes;
 
         /**
          * Creates a new Matcher.
          */
-        public Matcher(byte[] qnames, int qtype) {
+        public Matcher(byte[] qnames, int[] qtypes) {
             mQnames = qnames;
-            mQtype = qtype;
+            mQtypes = qtypes;
         }
 
         @Override
         public boolean equals(Object o) {
-            if (this == o) return true;
-            if (!(o instanceof Matcher that)) return false;
-            return mQtype == that.mQtype && Arrays.equals(mQnames, that.mQnames);
+            if (!(o instanceof Matcher matcher)) return false;
+            return Objects.deepEquals(mQnames, matcher.mQnames) && Objects.deepEquals(
+                    mQtypes, matcher.mQtypes);
         }
 
         @Override
         public int hashCode() {
-            int result = Objects.hash(mQtype);
-            result = 31 * result + Arrays.hashCode(mQnames);
-            return result;
+            return Objects.hash(Arrays.hashCode(mQnames), Arrays.hashCode(mQtypes));
         }
 
         @Override
         public String toString() {
-            return "Matcher{" + "mQnames=" + HexDump.toHexString(mQnames) + ", mQtype="
-                    + mQtype + '}';
+            return "Matcher{" + "mQnames=" + HexDump.toHexString(mQnames) + ", mQtypes="
+                    + Arrays.toString(mQtypes) + '}';
         }
     }
 

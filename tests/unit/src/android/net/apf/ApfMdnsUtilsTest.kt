@@ -32,7 +32,6 @@ import com.android.testutils.DevSdkIgnoreRunner
 import java.io.IOException
 import kotlin.test.assertContentEquals
 import kotlin.test.assertFailsWith
-import kotlin.test.assertTrue
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -49,7 +48,7 @@ class ApfMdnsUtilsTest {
 
     private val testServiceName1 = "NsdChat"
     private val testServiceName2 = "NsdCall"
-    private val testServiceType = "_http._tcp.local"
+    private val testServiceType = "_http._tcp"
     private val testSubType = "tsub"
     private val testHostName = "Android.local"
     private val testRawPacket1 = byteArrayOf(1, 2, 3, 4, 5)
@@ -91,17 +90,10 @@ class ApfMdnsUtilsTest {
             0, 0).map { it.toByte() }.toByteArray()
 
     @Test
-    fun testExtractOffloadReplyRule_noPriorityReturnsEmptySet() {
-        val info = createOffloadServiceInfo(Int.MAX_VALUE)
-        val rules = extractOffloadReplyRule(listOf(info))
-        assertTrue(rules.isEmpty())
-    }
-
-    @Test
-    fun testExtractOffloadReplyRule_extractRulesWithValidPriority() {
+    fun testExtractOffloadReplyRule_extractRules() {
         val info1 = createOffloadServiceInfo(10)
         val info2 = createOffloadServiceInfo(
-                11,
+                Integer.MAX_VALUE,
                 testServiceName2,
                 listOf("a", "b", "c", "d"),
                 testRawPacket2
@@ -109,22 +101,36 @@ class ApfMdnsUtilsTest {
         val rules = extractOffloadReplyRule(listOf(info2, info1))
         val expectedResult = listOf(
                 MdnsOffloadRule(
+                        "${info1.key.serviceName}.${info1.key.serviceType}",
                         listOf(
-                                MdnsOffloadRule.Matcher(encodedServiceType, TYPE_PTR),
-                                MdnsOffloadRule.Matcher(encodedServiceTypeWithSub1, TYPE_PTR),
-                                MdnsOffloadRule.Matcher(encodedFullServiceName1, TYPE_SRV),
-                                MdnsOffloadRule.Matcher(encodedFullServiceName1, TYPE_TXT),
-                                MdnsOffloadRule.Matcher(encodedTestHostName, TYPE_A),
-                                MdnsOffloadRule.Matcher(encodedTestHostName, TYPE_AAAA),
+                                MdnsOffloadRule.Matcher(encodedServiceType, intArrayOf(TYPE_PTR)),
+                                MdnsOffloadRule.Matcher(
+                                    encodedServiceTypeWithSub1,
+                                    intArrayOf(TYPE_PTR)
+                                ),
+                                MdnsOffloadRule.Matcher(
+                                    encodedFullServiceName1,
+                                    intArrayOf(TYPE_SRV, TYPE_TXT)
+                                ),
+                                MdnsOffloadRule.Matcher(
+                                    encodedTestHostName,
+                                    intArrayOf(TYPE_A, TYPE_AAAA)
+                                ),
 
                         ),
                         testRawPacket1,
                 ),
                 MdnsOffloadRule(
+                        "${info2.key.serviceName}.${info2.key.serviceType}",
                         listOf(
-                                MdnsOffloadRule.Matcher(encodedServiceTypeWithWildCard, TYPE_PTR),
-                                MdnsOffloadRule.Matcher(encodedFullServiceName2, TYPE_SRV),
-                                MdnsOffloadRule.Matcher(encodedFullServiceName2, TYPE_TXT),
+                                MdnsOffloadRule.Matcher(
+                                    encodedServiceTypeWithWildCard,
+                                    intArrayOf(TYPE_PTR)
+                                ),
+                                MdnsOffloadRule.Matcher(
+                                    encodedFullServiceName2,
+                                    intArrayOf(TYPE_SRV, TYPE_TXT)
+                                ),
 
                         ),
                         null,

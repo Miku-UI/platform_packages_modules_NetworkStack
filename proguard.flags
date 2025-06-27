@@ -1,3 +1,6 @@
+# Keep JNI registered methods
+-keepclasseswithmembers,includedescriptorclasses class * { native <methods>; }
+
 -keepclassmembers class com.android.networkstack.android.net.ip.IpClient$IpClientCommands {
     static final int CMD_*;
     static final int EVENT_*;

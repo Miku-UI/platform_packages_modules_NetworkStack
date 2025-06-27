@@ -16,6 +16,10 @@
 
 package android.net.apf;
 
+import static android.net.apf.ApfConstants.IPV4_FRAGMENT_MORE_FRAGS_MASK;
+import static android.net.apf.ApfConstants.IPV4_FRAGMENT_OFFSET_MASK;
+import static android.net.apf.ApfConstants.IPV4_FRAGMENT_OFFSET_OFFSET;
+import static android.net.apf.ApfCounterTracker.Counter.PASSED_IPV6_ICMP;
 import static android.net.apf.BaseApfGenerator.Rbit.Rbit0;
 import static android.net.apf.BaseApfGenerator.Register.R0;
 import static android.net.apf.BaseApfGenerator.Register.R1;
@@ -85,14 +89,14 @@ public abstract class ApfV4GeneratorBase<Type extends ApfV4GeneratorBase<Type>> 
      * </pre>
      * In this case "next_filter" may not have any generated code associated with it.
      */
-    public final Type defineLabel(String name) throws IllegalInstructionException {
+    public final Type defineLabel(short name) throws IllegalInstructionException {
         return append(new Instruction(Opcodes.LABEL).setLabel(name));
     }
 
     /**
      * Add an unconditional jump instruction to the end of the program.
      */
-    public final Type addJump(String target) {
+    public final Type addJump(short target) {
         return append(new Instruction(Opcodes.JMP).setTargetLabel(target));
     }
 
@@ -107,24 +111,24 @@ public abstract class ApfV4GeneratorBase<Type extends ApfV4GeneratorBase<Type>> 
      * Add an instruction to the end of the program to load the byte at offset {@code offset}
      * bytes from the beginning of the packet into {@code register}.
      */
-    public final Type addLoad8(Register r, int ofs) {
-        return append(new Instruction(Opcodes.LDB, r).addPacketOffset(ofs));
+    public final Type addLoad8intoR0(int ofs) {
+        return append(new Instruction(Opcodes.LDB, R0).addPacketOffset(ofs));
     }
 
     /**
      * Add an instruction to the end of the program to load 16-bits at offset {@code offset}
      * bytes from the beginning of the packet into {@code register}.
      */
-    public final Type addLoad16(Register r, int ofs) {
-        return append(new Instruction(Opcodes.LDH, r).addPacketOffset(ofs));
+    public final Type addLoad16intoR0(int ofs) {
+        return append(new Instruction(Opcodes.LDH, R0).addPacketOffset(ofs));
     }
 
     /**
      * Add an instruction to the end of the program to load 32-bits at offset {@code offset}
      * bytes from the beginning of the packet into {@code register}.
      */
-    public final Type addLoad32(Register r, int ofs) {
-        return append(new Instruction(Opcodes.LDW, r).addPacketOffset(ofs));
+    public final Type addLoad32intoR0(int ofs) {
+        return append(new Instruction(Opcodes.LDW, R0).addPacketOffset(ofs));
     }
 
     /**
@@ -132,8 +136,8 @@ public abstract class ApfV4GeneratorBase<Type extends ApfV4GeneratorBase<Type>> 
      * {@code register}. The offset of the loaded byte from the beginning of the packet is
      * the sum of {@code offset} and the value in register R1.
      */
-    public final Type addLoad8Indexed(Register r, int ofs) {
-        return append(new Instruction(Opcodes.LDBX, r).addTwosCompUnsigned(ofs));
+    public final Type addLoad8R1IndexedIntoR0(int ofs) {
+        return append(new Instruction(Opcodes.LDBX, R0).addTwosCompUnsigned(ofs));
     }
 
     /**
@@ -141,8 +145,8 @@ public abstract class ApfV4GeneratorBase<Type extends ApfV4GeneratorBase<Type>> 
      * {@code register}. The offset of the loaded 16-bits from the beginning of the packet is
      * the sum of {@code offset} and the value in register R1.
      */
-    public final Type addLoad16Indexed(Register r, int ofs) {
-        return append(new Instruction(Opcodes.LDHX, r).addTwosCompUnsigned(ofs));
+    public final Type addLoad16R1IndexedIntoR0(int ofs) {
+        return append(new Instruction(Opcodes.LDHX, R0).addTwosCompUnsigned(ofs));
     }
 
     /**
@@ -150,17 +154,14 @@ public abstract class ApfV4GeneratorBase<Type extends ApfV4GeneratorBase<Type>> 
      * {@code register}. The offset of the loaded 32-bits from the beginning of the packet is
      * the sum of {@code offset} and the value in register R1.
      */
-    public final Type addLoad32Indexed(Register r, int ofs) {
-        return append(new Instruction(Opcodes.LDWX, r).addTwosCompUnsigned(ofs));
+    public final Type addLoad32R1IndexedIntoR0(int ofs) {
+        return append(new Instruction(Opcodes.LDWX, R0).addTwosCompUnsigned(ofs));
     }
 
     /**
      * Add an instruction to the end of the program to add {@code value} to register R0.
      */
-    public final Type addAdd(long val) {
-        if (val == 0) return self();  // nop, as APFv6 would '+= R1'
-        return append(new Instruction(Opcodes.ADD).addTwosCompUnsigned(val));
-    }
+    public abstract Type addAdd(long val);
 
     /**
      * Add an instruction to the end of the program to subtract {@code value} from register R0.
@@ -188,10 +189,7 @@ public abstract class ApfV4GeneratorBase<Type extends ApfV4GeneratorBase<Type>> 
     /**
      * Add an instruction to the end of the program to logically and register R0 with {@code value}.
      */
-    public final Type addAnd(long val) {
-        if (val == 0) return addLoadImmediate(R0, 0);  // equivalent, as APFv6 would '+= R1'
-        return append(new Instruction(Opcodes.AND).addTwosCompUnsigned(val));
-    }
+    public abstract Type addAnd(long val);
 
     /**
      * Add an instruction to the end of the program to logically or register R0 with {@code value}.
@@ -284,7 +282,7 @@ public abstract class ApfV4GeneratorBase<Type extends ApfV4GeneratorBase<Type>> 
      * Add an instruction to the end of the program to jump to {@code target} if register R0's
      * value equals {@code value}.
      */
-    public final Type addJumpIfR0Equals(long val, String tgt) {
+    public final Type addJumpIfR0Equals(long val, short tgt) {
         return append(new Instruction(Opcodes.JEQ).addTwosCompUnsigned(val).setTargetLabel(tgt));
     }
 
@@ -308,7 +306,7 @@ public abstract class ApfV4GeneratorBase<Type extends ApfV4GeneratorBase<Type>> 
      * Add an instruction to the end of the program to jump to {@code target} if register R0's
      * value does not equal {@code value}.
      */
-    public final Type addJumpIfR0NotEquals(long val, String tgt) {
+    public final Type addJumpIfR0NotEquals(long val, short tgt) {
         return append(new Instruction(Opcodes.JNE).addTwosCompUnsigned(val).setTargetLabel(tgt));
     }
 
@@ -332,7 +330,7 @@ public abstract class ApfV4GeneratorBase<Type extends ApfV4GeneratorBase<Type>> 
      * Add an instruction to the end of the program to jump to {@code target} if register R0's
      * value is greater than {@code value}.
      */
-    public final Type addJumpIfR0GreaterThan(long val, String tgt) {
+    public final Type addJumpIfR0GreaterThan(long val, short tgt) {
         return append(new Instruction(Opcodes.JGT).addUnsigned(val).setTargetLabel(tgt));
     }
 
@@ -356,7 +354,7 @@ public abstract class ApfV4GeneratorBase<Type extends ApfV4GeneratorBase<Type>> 
      * Add an instruction to the end of the program to jump to {@code target} if register R0's
      * value is less than {@code value}.
      */
-    public final Type addJumpIfR0LessThan(long val, String tgt) {
+    public final Type addJumpIfR0LessThan(long val, short tgt) {
         return append(new Instruction(Opcodes.JLT).addUnsigned(val).setTargetLabel(tgt));
     }
 
@@ -380,7 +378,7 @@ public abstract class ApfV4GeneratorBase<Type extends ApfV4GeneratorBase<Type>> 
      * Add an instruction to the end of the program to jump to {@code target} if register R0's
      * value has any bits set that are also set in {@code value}.
      */
-    public final Type addJumpIfR0AnyBitsSet(long val, String tgt) {
+    public final Type addJumpIfR0AnyBitsSet(long val, short tgt) {
         return append(new Instruction(Opcodes.JSET).addTwosCompUnsigned(val).setTargetLabel(tgt));
     }
 
@@ -436,7 +434,7 @@ public abstract class ApfV4GeneratorBase<Type extends ApfV4GeneratorBase<Type>> 
      * Add an instruction to the end of the program to jump to {@code target} if register R0's
      * value equals register R1's value.
      */
-    public final Type addJumpIfR0EqualsR1(String tgt) {
+    public final Type addJumpIfR0EqualsR1(short tgt) {
         return append(new Instruction(Opcodes.JEQ, R1).setTargetLabel(tgt));
     }
 
@@ -444,7 +442,7 @@ public abstract class ApfV4GeneratorBase<Type extends ApfV4GeneratorBase<Type>> 
      * Add an instruction to the end of the program to jump to {@code target} if register R0's
      * value does not equal register R1's value.
      */
-    public final Type addJumpIfR0NotEqualsR1(String tgt) {
+    public final Type addJumpIfR0NotEqualsR1(short tgt) {
         return append(new Instruction(Opcodes.JNE, R1).setTargetLabel(tgt));
     }
 
@@ -452,7 +450,7 @@ public abstract class ApfV4GeneratorBase<Type extends ApfV4GeneratorBase<Type>> 
      * Add an instruction to the end of the program to jump to {@code target} if register R0's
      * value is greater than register R1's value.
      */
-    public final Type addJumpIfR0GreaterThanR1(String tgt) {
+    public final Type addJumpIfR0GreaterThanR1(short tgt) {
         return append(new Instruction(Opcodes.JGT, R1).setTargetLabel(tgt));
     }
 
@@ -460,7 +458,7 @@ public abstract class ApfV4GeneratorBase<Type extends ApfV4GeneratorBase<Type>> 
      * Add an instruction to the end of the program to jump to {@code target} if register R0's
      * value is less than register R1's value.
      */
-    public final Type addJumpIfR0LessThanR1(String target) {
+    public final Type addJumpIfR0LessThanR1(short target) {
         return append(new Instruction(Opcodes.JLT, R1).setTargetLabel(target));
     }
 
@@ -468,7 +466,7 @@ public abstract class ApfV4GeneratorBase<Type extends ApfV4GeneratorBase<Type>> 
      * Add an instruction to the end of the program to jump to {@code target} if register R0's
      * value has any bits set that are also set in R1's value.
      */
-    public final Type addJumpIfR0AnyBitsSetR1(String tgt) {
+    public final Type addJumpIfR0AnyBitsSetR1(short tgt) {
         return append(new Instruction(Opcodes.JSET, R1).setTargetLabel(tgt));
     }
 
@@ -477,10 +475,21 @@ public abstract class ApfV4GeneratorBase<Type extends ApfV4GeneratorBase<Type>> 
      * packet at an offset specified by register0 don't match {@code bytes}.
      * R=0 means check for not equal.
      */
-    public final Type addJumpIfBytesAtR0NotEqual(@NonNull byte[] bytes, String tgt) {
+    public final Type addJumpIfBytesAtR0NotEqual(@NonNull byte[] bytes, short tgt) {
         validateBytes(bytes);
         return append(new Instruction(Opcodes.JBSMATCH).addUnsigned(
                 bytes.length).setTargetLabel(tgt).setBytesImm(bytes));
+    }
+
+    /**
+     * Add an instruction to the end of the program to jump to {@code tgt} if the bytes of the
+     * packet at an offset specified by {@code offset} don't match {@code bytes}.
+     * This method needs to be non-final because APFv4 and APFv6 share the same implementation,
+     * but in APFv6.1, this method will be overridden to use the JBSPTRMATCH instruction.
+     */
+    public Type addJumpIfBytesAtOffsetNotEqual(int offset, @NonNull byte[] bytes, short tgt)
+            throws IllegalInstructionException {
+        return addLoadImmediate(R0, offset).addJumpIfBytesAtR0NotEqual(bytes, tgt);
     }
 
     /**
@@ -501,12 +510,56 @@ public abstract class ApfV4GeneratorBase<Type extends ApfV4GeneratorBase<Type>> 
 
     /**
      * Add instructions to the end of the program to increase counter and drop packet if the
+     * bytes of the packet at an offset specified by {@code offset} don't match {@code bytes}.
+     * This method needs to be non-final because APFv4 and APFv6 share the same implementation,
+     * but in APFv6.1, this method will be overridden to use the JBSPTRMATCH instruction.
+     */
+    public Type addCountAndDropIfBytesAtOffsetNotEqual(int offset, byte[] bytes,
+            ApfCounterTracker.Counter cnt) throws IllegalInstructionException {
+        return addLoadImmediate(R0, offset).addCountAndDropIfBytesAtR0NotEqual(bytes, cnt);
+    }
+
+    /**
+     * Add instructions to the end of the program to increase counter and pass packet if the
+     * bytes of the packet at an offset specified by {@code offset} don't match {@code bytes}.
+     * This method needs to be non-final because APFv4 and APFv6 share the same implementation,
+     * but in APFv6.1, this method will be overridden to use the JBSPTRMATCH instruction.
+     */
+    public Type addCountAndPassIfBytesAtOffsetNotEqual(int offset, byte[] bytes,
+            ApfCounterTracker.Counter cnt) throws IllegalInstructionException {
+        return addLoadImmediate(R0, offset).addCountAndPassIfBytesAtR0NotEqual(bytes, cnt);
+    }
+
+    /**
+     * Add instructions to the end of the program to increase counter and drop packet if the
+     * bytes of the packet at an offset specified by {@code offset} does match {@code bytes}.
+     * This method needs to be non-final because APFv4 and APFv6 share the same implementation,
+     * but in APFv6.1, this method will be overridden to use the JBSPTRMATCH instruction.
+     */
+    public Type addCountAndDropIfBytesAtOffsetEqual(int offset, byte[] bytes,
+            ApfCounterTracker.Counter cnt) throws IllegalInstructionException {
+        return addLoadImmediate(R0, offset).addCountAndDropIfBytesAtR0Equal(bytes, cnt);
+    }
+
+    /**
+     * Add instructions to the end of the program to increase counter and pass packet if the
+     * bytes of the packet at an offset specified by {@code offset} does match {@code bytes}.
+     * This method needs to be non-final because APFv4 and APFv6 share the same implementation,
+     * but in APFv6.1, this method will be overridden to use the JBSPTRMATCH instruction.
+     */
+    public Type addCountAndPassIfBytesAtOffsetEqual(int offset, byte[] bytes,
+            ApfCounterTracker.Counter cnt) throws IllegalInstructionException {
+        return addLoadImmediate(R0, offset).addCountAndPassIfBytesAtR0Equal(bytes, cnt);
+    }
+
+    /**
+     * Add instructions to the end of the program to increase counter and drop packet if the
      * bytes of the packet at an offset specified by register0 match {@code bytes}.
      * WARNING: may modify R1
      */
     public final Type addCountAndDropIfBytesAtR0Equal(byte[] bytes,
             ApfCounterTracker.Counter cnt) throws IllegalInstructionException {
-        final String tgt = getUniqueLabel();
+        final short tgt = getUniqueLabel();
         return addJumpIfBytesAtR0NotEqual(bytes, tgt).addCountAndDrop(cnt).defineLabel(tgt);
     }
 
@@ -518,7 +571,7 @@ public abstract class ApfV4GeneratorBase<Type extends ApfV4GeneratorBase<Type>> 
      */
     public final Type addCountAndPassIfBytesAtR0Equal(byte[] bytes,
             ApfCounterTracker.Counter cnt) throws IllegalInstructionException {
-        final String tgt = getUniqueLabel();
+        final short tgt = getUniqueLabel();
         return addJumpIfBytesAtR0NotEqual(bytes, tgt).addCountAndPass(cnt).defineLabel(tgt);
     }
 
@@ -570,6 +623,24 @@ public abstract class ApfV4GeneratorBase<Type extends ApfV4GeneratorBase<Type>> 
     public final Type addStoreToMemory(MemorySlot slot, Register r)
             throws IllegalInstructionException {
         return append(new Instruction(ExtendedOpcodes.STM, slot.value, r));
+    }
+
+    /**
+     * Add instructions to the end of the program to check whether the packet is an unfragmented
+     * IPv4 packet with the specified protocol, and jump to the target if it is not.
+     * WARNING: this helper method will modify R0
+     */
+    public Type addJumpIfNotUnfragmentedIPv4Protocol(long protocol, short tgt) {
+        // Mask out all but the reserved and don't fragment bits, plus the TTL field.
+        // Because:
+        //   IPV4_FRAGMENT_OFFSET_MASK = 0x1fff
+        //   IPV4_FRAGMENT_MORE_FRAGS_MASK = 0x2000
+        // hence this constant ends up being 0x3FFF00FF.
+        // We want the more flag bit and offset to be 0 (ie. not a fragment),
+        // so after this masking we end up with just the ip protocol.
+        return addLoad32intoR0(IPV4_FRAGMENT_OFFSET_OFFSET)
+                .addAnd((IPV4_FRAGMENT_MORE_FRAGS_MASK | IPV4_FRAGMENT_OFFSET_MASK) << 16 | 0xFF)
+                .addJumpIfR0NotEquals(protocol, tgt);
     }
 
     /**
@@ -664,5 +735,30 @@ public abstract class ApfV4GeneratorBase<Type extends ApfV4GeneratorBase<Type>> 
      * @throws IllegalInstructionException
      */
     public abstract Type addCountTrampoline() throws IllegalInstructionException;
+
+    /**
+     * Returns the base program size when the interpreter is initialized.
+     */
+    public abstract int getBaseProgramSize();
+
+    /**
+     * Appends default packet handling and counting to the APF program.
+     * This method adds logic to:
+     * 1. Increment the {@code PASSED_IPV6_ICMP} counter and pass the packet.
+     * 3. Add trampoline logic for counter processing.
+     *
+     *
+     * @return The type resulting from the appended instructions.
+     * @throws IllegalInstructionException If an error occurs while adding instructions.
+     */
+    public final Type addDefaultPacketHandling() throws IllegalInstructionException {
+        addCountAndPass(PASSED_IPV6_ICMP);
+        return addCountTrampoline();
+    }
+
+    /**
+     * Returns an overestimate of the size of the default packet handling logic.
+     */
+    public abstract int getDefaultPacketHandlingSizeOverEstimate();
 }
 

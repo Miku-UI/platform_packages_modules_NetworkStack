@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2023 The Android Open Source Project
+ * Copyright (C) 2025 The Android Open Source Project
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -15,21 +15,24 @@
  */
 package android.net.apf;
 
-import android.system.ErrnoException;
-
-import java.io.IOException;
-
 /**
- * The interface for TestAndroidPacketFilter
+ * APFv6.1 assembler/generator. A tool for generating an APFv6.1 program.
+ *
+ * @hide
  */
-public interface TestAndroidPacketFilter extends AndroidPacketFilter {
+public final class ApfV61Generator extends ApfV61GeneratorBase<ApfV61Generator> {
     /**
-     * Pretend an RA packet has been received and show it to ApfFilter.
+     * Returns true if we support the specified {@code version}, otherwise false.
      */
-    void pretendPacketReceived(byte[] packet) throws IOException, ErrnoException;
+    public static boolean supportsVersion(int version) {
+        return version >= APF_VERSION_61;
+    }
 
     /**
-     * Generate and install a new filter program.
+     * Creates an ApfV61Generator instance.
      */
-    void installNewProgramLocked();
+    public ApfV61Generator(int version, int ramSize, int clampSize)
+            throws IllegalInstructionException {
+        super(new byte[0], version, ramSize, clampSize);
+    }
 }

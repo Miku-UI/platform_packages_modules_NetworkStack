@@ -16,13 +16,21 @@
 
 package com.android.networkstack.util;
 
+import static android.net.apf.ApfConstants.IPV6_SOLICITED_NODES_PREFIX;
+import static android.os.Build.VERSION.CODENAME;
+import static android.os.Build.VERSION.SDK_INT;
+import static android.system.OsConstants.IFA_F_DEPRECATED;
+import static android.system.OsConstants.IFA_F_TENTATIVE;
+
 import android.content.Context;
 import android.net.IpPrefix;
 import android.net.LinkAddress;
+import android.net.LinkProperties;
 import android.net.MacAddress;
 import android.system.ErrnoException;
 import android.util.Log;
 
+import androidx.annotation.ChecksSdkIntAtLeast;
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
 
@@ -64,7 +72,7 @@ public class NetworkStackUtils {
     public static final String CAPTIVE_PORTAL_OTHER_HTTP_URLS = "captive_portal_other_http_urls";
 
     /**
-     * A comma separated list of URLs used for network validation. in addition to the HTTPS url
+     * A comma separated list of URLs used for network validation in addition to the HTTPS url
      * associated with the CAPTIVE_PORTAL_HTTPS_URL settings.
      */
     public static final String CAPTIVE_PORTAL_OTHER_HTTPS_URLS = "captive_portal_other_https_urls";
@@ -186,32 +194,11 @@ public class NetworkStackUtils {
     public static final String VALIDATION_METRICS_VERSION = "validation_metrics_version";
 
     /**
-     * Experiment flag to enable sending Gratuitous APR and Gratuitous Neighbor Advertisement for
-     * all assigned IPv4 and IPv6 GUAs after completing L2 roaming.
-     */
-    public static final String IPCLIENT_GARP_NA_ROAMING_VERSION =
-            "ipclient_garp_na_roaming_version";
-
-    /**
      * Experiment flag to enable "mcast_resolicit" neighbor parameter in IpReachabilityMonitor,
      * set it to 3 by default.
      */
     public static final String IP_REACHABILITY_MCAST_RESOLICIT_VERSION =
             "ip_reachability_mcast_resolicit_version";
-
-    /**
-     * Experiment flag to attempt to ignore the on-link IPv6 DNS server which fails to respond to
-     * address resolution.
-     */
-    public static final String IP_REACHABILITY_IGNORE_INCOMPLETE_IPV6_DNS_SERVER_VERSION =
-            "ip_reachability_ignore_incompleted_ipv6_dns_server_version";
-
-    /**
-     * Experiment flag to attempt to ignore the IPv6 default router which fails to respond to
-     * address resolution.
-     */
-    public static final String IP_REACHABILITY_IGNORE_INCOMPLETE_IPV6_DEFAULT_ROUTER_VERSION =
-            "ip_reachability_ignore_incompleted_ipv6_default_router_version";
 
     /**
      * Experiment flag to treat router MAC address changes as a failure only on roam.
@@ -224,24 +211,6 @@ public class NetworkStackUtils {
      */
     public static final String IP_REACHABILITY_IGNORE_ORGANIC_NUD_FAILURE_VERSION =
             "ip_reachability_ignore_organic_nud_failure_version";
-
-    /**
-     * Experiment flag to ignore all NUD failures from the neighbor that has never ever entered the
-     * reachable state.
-     */
-    public static final String IP_REACHABILITY_IGNORE_NEVER_REACHABLE_NEIGHBOR_VERSION =
-            "ip_reachability_ignore_never_reachable_neighbor_version";
-
-    /**
-     * Experiment flag to enable DHCPv6 Prefix Delegation(RFC8415) in IpClient.
-     */
-    public static final String IPCLIENT_DHCPV6_PREFIX_DELEGATION_VERSION =
-            "ipclient_dhcpv6_prefix_delegation_version";
-
-    /**
-     * Experiment flag to enable new ra filter.
-     */
-    public static final String APF_NEW_RA_FILTER_VERSION = "apf_new_ra_filter_version";
 
     /**
      * Experiment flag to enable the feature of polling counters in Apf.
@@ -275,6 +244,12 @@ public class NetworkStackUtils {
             "ipclient_dhcpv6_pd_preferred_flag_version";
 
     /**
+     * Experiment flag to replace INetd usage with netlink in IpClient.
+     */
+    public static final String IPCLIENT_REPLACE_NETD_WITH_NETLINK_VERSION =
+            "ipclient_replace_netd_with_netlink_version";
+
+    /**
      * Experiment flag to enable Discovery of Designated Resolvers (DDR).
      * This flag requires networkmonitor_async_privdns_resolution flag.
      */
@@ -285,6 +260,30 @@ public class NetworkStackUtils {
      */
     public static final String IP_REACHABILITY_IGNORE_NUD_FAILURE_VERSION =
             "ip_reachability_ignore_nud_failure_version";
+
+    /**
+     * Experiment flag to enable the feature of handle IPv4 ping offload in Apf.
+     */
+    public static final String APF_HANDLE_PING4_OFFLOAD_VERSION =
+            "apf_handle_ping_offload_version";
+
+    /**
+     * Experiment flag to enable the feature of handle IPv6 ping offload in Apf.
+     */
+    public static final String APF_HANDLE_PING6_OFFLOAD_VERSION =
+            "apf_handle_ping6_offload_version";
+
+    /**
+     * Experiment flag to enable the feature of handle IGMP offload in Apf.
+     */
+    public static final String APF_HANDLE_IGMP_OFFLOAD_VERSION =
+            "apf_handle_igmp_offload_version";
+
+    /**
+     * Experiment flag to enable the feature of handle MLD offload in Apf.
+     */
+    public static final String APF_HANDLE_MLD_OFFLOAD_VERSION =
+            "apf_handle_mld_offload_version";
 
     /**** BEGIN Feature Kill Switch Flags ****/
 
@@ -306,6 +305,9 @@ public class NetworkStackUtils {
     public static final String IGNORE_TCP_INFO_FOR_BLOCKED_UIDS =
             "ignore_tcp_info_for_blocked_uids";
 
+    /** Kill switch to force disable APF */
+    public static final String APF_ENABLE = "apf_enable";
+
     /**
      * Kill switch flag to disable the feature of handle arp offload in Apf.
      * Warning: the following flag String is incorrect. The feature that is not chickened out is
@@ -318,8 +320,42 @@ public class NetworkStackUtils {
      */
     public static final String APF_HANDLE_ND_OFFLOAD = "apf_handle_nd_offload";
 
+    /**
+     * Kill switch flag to disable the feature of handle IGMP offload in Apf.
+     */
+    public static final String APF_HANDLE_IGMP_OFFLOAD = "apf_handle_igmp_offload";
+
+    /**
+     * Kill switch flag to disable the feature of handle MLD offload in Apf.
+     */
+    public static final String APF_HANDLE_MLD_OFFLOAD = "apf_handle_mld_offload";
+
+    /**
+     * Kill switch flag to disable the feature of handle IPv4 ping offload in Apf.
+     */
+    public static final String APF_HANDLE_PING4_OFFLOAD = "apf_handle_ping4_offload";
+
+    /**
+     * Kill switch flag to disable the feature of handle IPv6 ping offload in Apf.
+     */
+    public static final String APF_HANDLE_PING6_OFFLOAD = "apf_handle_ping6_offload";
     static {
         System.loadLibrary("networkstackutilsjni");
+    }
+
+    /**
+     * Convert IPv4 multicast address to ethernet multicast address in network order.
+     */
+    public static MacAddress ipv4MulticastToEthernetMulticast(@NonNull final Inet4Address addr) {
+        final byte[] etherMulticast = new byte[6];
+        final byte[] ipv4Multicast = addr.getAddress();
+        etherMulticast[0] = (byte) 0x01;
+        etherMulticast[1] = (byte) 0x00;
+        etherMulticast[2] = (byte) 0x5e;
+        etherMulticast[3] = (byte) (ipv4Multicast[1] & 0x7f);
+        etherMulticast[4] = ipv4Multicast[2];
+        etherMulticast[5] = ipv4Multicast[3];
+        return MacAddress.fromBytes(etherMulticast);
     }
 
     /**
@@ -358,6 +394,24 @@ public class NetworkStackUtils {
             Log.e(TAG, "Invalid host IP address " + addr.getHostAddress(), e);
             return null;
         }
+    }
+
+    /**
+     * Checks if the given IPv6 address is a solicited-node multicast address.
+     *
+     * <p>Solicited-node multicast addresses are used for Neighbor Discovery in IPv6.
+     * They have a specific prefix (FF02::1:FFxx:xxxx) where the last 64 bits are derived
+     * from the interface's link-layer address. This function only checks if the address
+     * has the correct prefix; it does *not* verify the lower 64 bits.
+     */
+    public static boolean isIPv6AddressSolicitedNodeMulticast(@NonNull final Inet6Address addr) {
+        for (int i = 0; i < IPV6_SOLICITED_NODES_PREFIX.length; i++) {
+            if (addr.getAddress()[i] != IPV6_SOLICITED_NODES_PREFIX[i]) {
+                return false;
+            }
+        }
+
+        return true;
     }
 
     /**
@@ -409,6 +463,58 @@ public class NetworkStackUtils {
         }
     }
 
+    /** Checks if the device is running on a release version of Android Baklava or newer */
+    @ChecksSdkIntAtLeast(api = 36 /* BUILD_VERSION_CODES.Baklava */)
+    public static boolean isAtLeast25Q2() {
+        return SDK_INT >= 36 || (SDK_INT == 35 && isAtLeastPreReleaseCodename("Baklava"));
+    }
+
+    private static boolean isAtLeastPreReleaseCodename(@NonNull String codename) {
+        // Special case "REL", which means the build is not a pre-release build.
+        if ("REL".equals(CODENAME)) {
+            return false;
+        }
+
+        // Otherwise lexically compare them. Return true if the build codename is equal to or
+        // greater than the requested codename.
+        return CODENAME.compareTo(codename) >= 0;
+    }
+
+    /**
+     * Select the preferred IPv6 link-local address based on the rules defined in rfc3484,
+     * Section 5.
+     * <p>
+     * The address selection criteria are as follows:
+     * 1. Select a non-tentative, non-deprecated address, if available.
+     * 2. If no such address exists, select any non-tentative address.
+     */
+    public static Inet6Address selectPreferredIPv6LinkLocalAddress(@NonNull LinkProperties lp) {
+        Inet6Address preferredAddress = null;
+        for (LinkAddress linkAddress : lp.getLinkAddresses()) {
+            final InetAddress inetAddress = linkAddress.getAddress();
+            final int flags = linkAddress.getFlags();
+
+            if (!(inetAddress instanceof Inet6Address)) {
+                continue;
+            }
+
+            if (!inetAddress.isLinkLocalAddress()) {
+                continue;
+            }
+
+            if ((flags & IFA_F_TENTATIVE) != 0) {
+                continue;
+            }
+
+            preferredAddress = (Inet6Address) inetAddress;
+            if ((flags & IFA_F_DEPRECATED) == 0L) {
+                return preferredAddress;
+            }
+        }
+
+        return preferredAddress;
+    }
+
     /**
      * Attaches a socket filter that accepts DHCP packets to the given socket.
      */
@@ -436,6 +542,27 @@ public class NetworkStackUtils {
             String ifname, FileDescriptor fd) throws IOException {
         addArpEntry(ethAddr.toByteArray(), ipv4Addr.getAddress(), ifname, fd);
     }
+
+    /**
+     * Attaches a socket filter that accepts egress IGMPv2/IGMPv3 reports to the given socket.
+     *
+     * This filter doesn't include IGMPv1 report since device will not send out IGMPv1 report
+     * when the device leaves a multicast address group.
+     *
+     * @param fd the socket's {@link FileDescriptor}.
+     */
+    public static native void attachEgressIgmpReportFilter(FileDescriptor fd) throws ErrnoException;
+
+    /**
+     * Attaches a socket filter that accepts egress IGMPv2/v3, MLDv1/v2 reports to the given socket.
+     *
+     * This filter doesn't include IGMPv1 report since device will not send out IGMPv1 report
+     * when the device leaves a multicast address group.
+     *
+     * @param fd the socket's {@link FileDescriptor}.
+     */
+    public static native void attachEgressMulticastReportFilter(
+            FileDescriptor fd) throws ErrnoException;
 
     private static native void addArpEntry(byte[] ethAddr, byte[] netAddr, String ifname,
             FileDescriptor fd) throws IOException;

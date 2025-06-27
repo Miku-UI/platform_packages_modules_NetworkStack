@@ -34,6 +34,7 @@ java_defaults {
         "net-tests-utils",
         "net-utils-framework-common",
         "testables",
+        "truth",
     ],
     libs: [
         "android.test.runner.stubs",
@@ -115,6 +116,7 @@ java_defaults {
     name: "libnetworkstackutilsjni_deps",
     jni_libs: [
         "libnativehelper_compat_libc++",
-        "libnetworkstacktestsjni",
+        "libapfjniv6",
+        "libapfjninext",
     ],
 }

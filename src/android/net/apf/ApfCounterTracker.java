@@ -26,7 +26,7 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * Common counter class for {@code ApfFilter} and {@code LegacyApfFilter}.
+ * Counter class for {@code ApfFilter}.
  *
  * @hide
  */
@@ -45,45 +45,44 @@ public class ApfCounterTracker {
         PASSED_ALLOCATE_FAILURE, // hardcoded in APFv6 interpreter
         PASSED_TRANSMIT_FAILURE, // hardcoded in APFv6 interpreter
         CORRUPT_DNS_PACKET,      // hardcoded in APFv6 interpreter
+        EXCEPTIONS,              // hardcoded in APFv6.1 interpreter
         FILTER_AGE_SECONDS,
         FILTER_AGE_16384THS,
         APF_VERSION,
         APF_PROGRAM_ID,
-        // TODO: removing PASSED_ARP after remove LegacyApfFilter.java
         // The counter sequence should keep the same as ApfSessionInfoMetrics.java
-        PASSED_ARP,  // see also MIN_PASS_COUNTER below.
-        PASSED_ARP_BROADCAST_REPLY,
-        // TODO: removing PASSED_ARP_NON_IPV4 after remove LegacyApfFilter.java
-        PASSED_ARP_NON_IPV4,
+        PASSED_ARP_BROADCAST_REPLY,  // see also MIN_PASS_COUNTER below.
         PASSED_ARP_REQUEST,
         PASSED_ARP_UNICAST_REPLY,
-        PASSED_ARP_UNKNOWN,
         PASSED_DHCP,
         PASSED_ETHER_OUR_SRC_MAC,
         PASSED_IPV4,
         PASSED_IPV4_FROM_DHCPV4_SERVER,
         PASSED_IPV4_UNICAST,
+        PASSED_IPV6_HOPOPTS,
         PASSED_IPV6_ICMP,
         PASSED_IPV6_NON_ICMP,
-        PASSED_IPV6_NS_DAD,
-        PASSED_IPV6_NS_NO_ADDRESS,
-        PASSED_IPV6_NS_NO_SLLA_OPTION,
-        PASSED_IPV6_NS_TENTATIVE,
         PASSED_IPV6_UNICAST_NON_ICMP,
         PASSED_NON_IP_UNICAST,
-        PASSED_MDNS,
-        PASSED_MLD,  // see also MAX_PASS_COUNTER below
+        PASSED_MDNS, // see also MAX_PASS_COUNTER below
         DROPPED_ETH_BROADCAST,  // see also MIN_DROP_COUNTER below
+        DROPPED_ETHER_OUR_SRC_MAC,
         DROPPED_RA,
         DROPPED_IPV4_L2_BROADCAST,
         DROPPED_IPV4_BROADCAST_ADDR,
         DROPPED_IPV4_BROADCAST_NET,
+        DROPPED_IPV4_ICMP_INVALID,
         DROPPED_IPV4_MULTICAST,
         DROPPED_IPV4_NON_DHCP4,
+        DROPPED_IPV4_PING_REQUEST_REPLIED,
+        DROPPED_IPV6_ICMP6_ECHO_REQUEST_INVALID,
+        DROPPED_IPV6_ICMP6_ECHO_REQUEST_REPLIED,
         DROPPED_IPV6_ROUTER_SOLICITATION,
+        DROPPED_IPV6_MLD_INVALID,
+        DROPPED_IPV6_MLD_REPORT,
+        DROPPED_IPV6_MLD_V1_GENERAL_QUERY_REPLIED,
+        DROPPED_IPV6_MLD_V2_GENERAL_QUERY_REPLIED,
         DROPPED_IPV6_MULTICAST_NA,
-        DROPPED_IPV6_MULTICAST,
-        DROPPED_IPV6_MULTICAST_PING,
         DROPPED_IPV6_NON_ICMP_MULTICAST,
         DROPPED_IPV6_NS_INVALID,
         DROPPED_IPV6_NS_OTHER_HOST,
@@ -91,14 +90,14 @@ public class ApfCounterTracker {
         DROPPED_802_3_FRAME,
         DROPPED_ETHERTYPE_NOT_ALLOWED,
         DROPPED_IPV4_KEEPALIVE_ACK,
-        DROPPED_IPV6_KEEPALIVE_ACK,
         DROPPED_IPV4_NATT_KEEPALIVE,
         DROPPED_MDNS,
+        DROPPED_MDNS_REPLIED,
+        DROPPED_NON_UNICAST_TDLS,
         DROPPED_IPV4_TCP_PORT7_UNICAST,
         DROPPED_ARP_NON_IPV4,
         DROPPED_ARP_OTHER_HOST,
         DROPPED_ARP_REPLY_SPA_NO_HOST,
-        DROPPED_ARP_REQUEST_ANYHOST,
         DROPPED_ARP_REQUEST_REPLIED,
         DROPPED_ARP_UNKNOWN,
         DROPPED_ARP_V6_ONLY,
@@ -113,7 +112,7 @@ public class ApfCounterTracker {
          * a given counter.
          */
         public int offset() {
-            return -this.ordinal() * 4;  // Currently, all counters are 32bit long.
+            return -this.value() * 4;  // Currently, all counters are 32bit long.
         }
 
         /**
@@ -143,12 +142,38 @@ public class ApfCounterTracker {
             }
             return RESERVED_OOB;
         }
+
+        private void checkCounterRange(Counter lowerBound, Counter upperBound) {
+            if (value() < lowerBound.value() || value() > upperBound.value()) {
+                throw new IllegalArgumentException(
+                        String.format("Counter %s, is not in range [%s, %s]", this,
+                                lowerBound, upperBound));
+            }
+        }
+
+        /**
+         * Return the label such that if we jump to it, the counter will be increased by 1 and
+         * the packet will be passed.
+         */
+        public short getJumpPassLabel() {
+            checkCounterRange(MIN_PASS_COUNTER, MAX_PASS_COUNTER);
+            return (short) (2 * this.value());
+        }
+
+        /**
+         * Return the label such that if we jump to it, the counter will be increased by 1 and
+         * the packet will be dropped.
+         */
+        public short getJumpDropLabel() {
+            checkCounterRange(MIN_DROP_COUNTER, MAX_DROP_COUNTER);
+            return (short) (2 * this.value() + 1);
+        }
     }
 
     public static final Counter MIN_DROP_COUNTER = Counter.DROPPED_ETH_BROADCAST;
     public static final Counter MAX_DROP_COUNTER = Counter.DROPPED_GARP_REPLY;
-    public static final Counter MIN_PASS_COUNTER = Counter.PASSED_ARP;
-    public static final Counter MAX_PASS_COUNTER = Counter.PASSED_MLD;
+    public static final Counter MIN_PASS_COUNTER = Counter.PASSED_ARP_BROADCAST_REPLY;
+    public static final Counter MAX_PASS_COUNTER = Counter.PASSED_MDNS;
 
     private static final String TAG = ApfCounterTracker.class.getSimpleName();
 

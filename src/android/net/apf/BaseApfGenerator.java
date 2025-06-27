@@ -21,15 +21,12 @@ import static android.net.apf.BaseApfGenerator.Rbit.Rbit1;
 import static android.net.apf.BaseApfGenerator.Register.R0;
 
 import android.annotation.NonNull;
+import android.util.SparseArray;
 
-import com.android.internal.annotations.VisibleForTesting;
-import com.android.net.module.util.ByteUtils;
-import com.android.net.module.util.CollectionUtils;
 import com.android.net.module.util.HexDump;
 
 import java.util.ArrayList;
 import java.util.Arrays;
-import java.util.HashMap;
 import java.util.List;
 import java.util.Objects;
 
@@ -109,7 +106,33 @@ public abstract class BaseApfGenerator {
         // R=1 means copy from APF program/data region.
         // The copy length is stored in (u8)imm2.
         // e.g. "pktcopy 5, 5" "datacopy 5, 5"
-        PKTDATACOPY(25);
+        PKTDATACOPY(25),
+        // JSET with reverse condition (jump if no bits set)
+        JNSET(26),
+        // APFv6.1: Compare byte sequence [R=0 not] equal, e.g. "jbsptrne 22,16,label,<dataptr>"
+        // imm1 is jmp target
+        // imm2(u8) is offset [0..255] into packet
+        // imm3(u8) is (count - 1) * 16 + (compare_len - 1), thus both count & compare_len are in
+        // [1..16] which is followed by compare_len u8 'even offset' ptrs into max 526 byte data
+        // section to compare against - ie. they are multipied by 2 and have 3 added to them
+        // (to skip over 'datajmp u16')
+        // Warning: do not specify the same byte sequence multiple times.
+        JBSPTRMATCH(27),
+        // APFv6.1: Bytecode optimized allocate | transmit instruction.
+        // R=1 -> allocate(266 + imm * 8)
+        // R=0 -> transmit
+        //   immlen=0 -> no checksum offload (transmit ip_ofs=255)
+        //   immlen>0 -> with checksum offload (transmit(udp) ip_ofs=14 ...)
+        //     imm & 7 | type of offload      | ip_ofs | udp | csum_start  | csum_ofs      | partial_csum |
+        //         0   | ip4/udp              |   14   |  X  | 14+20-8 =26 | 14+20   +6=40 |   imm >> 3   |
+        //         1   | ip4/tcp              |   14   |     | 14+20-8 =26 | 14+20  +10=44 |     --"--    |
+        //         2   | ip4/icmp             |   14   |     | 14+20   =34 | 14+20   +2=36 |     --"--    |
+        //         3   | ip4/routeralert/icmp |   14   |     | 14+20+4 =38 | 14+20+4 +2=40 |     --"--    |
+        //         4   | ip6/udp              |   14   |  X  | 14+40-32=22 | 14+40   +6=60 |     --"--    |
+        //         5   | ip6/tcp              |   14   |     | 14+40-32=22 | 14+40  +10=64 |     --"--    |
+        //         6   | ip6/icmp             |   14   |     | 14+40-32=22 | 14+40   +2=56 |     --"--    |
+        //         7   | ip6/routeralert/icmp |   14   |     | 14+40-32=22 | 14+40+8 +2=64 |     --"--    |
+        ALLOC_XMIT(28);
 
         final int value;
 
@@ -191,11 +214,25 @@ public abstract class BaseApfGenerator {
         //        bottom 1 bit  - =0 jmp if in set, =1 if not in set
         // imm4(imm3 * 1/2/3/4 bytes): the *UNIQUE* values to compare against
         JONEOF(47),
-        /* Specify length of exception buffer, which is populated on abnormal program termination.
-         * imm1: Extended opcode
-         * imm2(u16): Length of exception buffer (located *immediately* after the program itself)
-         */
-        EXCEPTIONBUFFER(48);
+        // Specify length of exception buffer, which is populated on abnormal program termination.
+        // imm1: Extended opcode
+        // imm2(u16): Length of exception buffer (located *immediately* after the program itself)
+        EXCEPTIONBUFFER(48),
+        // Jumps if the UDP payload content (starting at R0) does [not] match one
+        // of the specified QNAMEs in question records, applying case insensitivity.
+        // The qtypes in the input packet can match either of the two supplied qtypes.
+        // SAFE version PASSES corrupt packets, while the other one DROPS.
+        // R=0/1 meaning 'does not match'/'matches'
+        // R0: Offset to UDP payload content
+        // imm1: Extended opcode
+        // imm2: Jump label offset
+        // imm3(u8): Question type1 (PTR/SRV/TXT/A/AAAA)
+        // imm4(u8): Question type2 (PTR/SRV/TXT/A/AAAA)
+        // imm5(bytes): null terminated list of null terminated LV-encoded QNAMEs
+        // e.g.: "jdnsqeq2 R0,label,A,AAAA,\002aa\005local\0\0",
+        //       "jdnsqne2 R0,label,A,AAAA,\002aa\005local\0\0"
+        JDNSQMATCH2(51),
+        JDNSQMATCHSAFE2(53);
 
         final int value;
 
@@ -353,9 +390,10 @@ public abstract class BaseApfGenerator {
         // When mOpcode is a jump:
         private int mTargetLabelSize;
         private int mImmSizeOverride = -1;
-        private String mTargetLabel;
-        // When mOpcode == Opcodes.LABEL:
-        private String mLabel;
+        // mTargetLabel == -1 indicates it is uninitialized. mTargetLabel < -1 indicates a label
+        // within the program used for offset calculation. mTargetLabel >= 0 indicates a pass/drop
+        // label, its offset is mTargetLabel + program size.
+        private short mTargetLabel = -1;
         public byte[] mBytesImm;
         // Offset in bytes from the beginning of this program.
         // Set by {@link BaseApfGenerator#generate}.
@@ -457,19 +495,18 @@ public abstract class BaseApfGenerator {
             return this;
         }
 
-        Instruction setLabel(String label) throws IllegalInstructionException {
-            if (mLabels.containsKey(label)) {
+        Instruction setLabel(short label) throws IllegalInstructionException {
+            if (mLabels.get(label) != null) {
                 throw new IllegalInstructionException("duplicate label " + label);
             }
             if (mOpcode != Opcodes.LABEL) {
                 throw new IllegalStateException("adding label to non-label instruction");
             }
-            mLabel = label;
             mLabels.put(label, this);
             return this;
         }
 
-        Instruction setTargetLabel(String label) {
+        Instruction setTargetLabel(short label) {
             mTargetLabel = label;
             mTargetLabelSize = 4; // May shrink later on in generate().
             return this;
@@ -485,15 +522,16 @@ public abstract class BaseApfGenerator {
             return this;
         }
 
-        /**
-         * Attempts to match {@code content} with existing data bytes. If not exist, then
-         * append the {@code content} to the data bytes.
-         * Returns the start offset of the content from the beginning of the program.
-         */
-        int maybeUpdateBytesImm(byte[] content) throws IllegalInstructionException {
+        int findMatchInDataBytes(@NonNull byte[] content, int fromIndex, int toIndex)
+                throws IllegalInstructionException {
+            if (fromIndex >= toIndex || fromIndex < 0 || toIndex > content.length) {
+                throw new IllegalArgumentException(
+                        String.format("fromIndex: %d, toIndex: %d, content length: %d", fromIndex,
+                                toIndex, content.length));
+            }
             if (mOpcode != Opcodes.JMP || mBytesImm == null) {
                 throw new IllegalInstructionException(String.format(
-                        "maybeUpdateBytesImm() is only valid for jump data instruction, mOpcode "
+                        "this method is only valid for jump data instruction, mOpcode "
                                 + ":%s, mBytesImm: %s", Opcodes.JMP,
                         mBytesImm == null ? "(empty)" : HexDump.toHexString(mBytesImm)));
             }
@@ -501,10 +539,45 @@ public abstract class BaseApfGenerator {
                 throw new IllegalInstructionException(
                         "mImmSizeOverride must be 2, mImmSizeOverride: " + mImmSizeOverride);
             }
-            int offsetInDataBytes = CollectionUtils.indexOfSubArray(mBytesImm, content);
+            final int subArrayLength = toIndex - fromIndex;
+            for (int i = 0; i < mBytesImm.length - subArrayLength + 1; i++) {
+                boolean found = true;
+                for (int j = 0; j < subArrayLength; j++) {
+                    if (mBytesImm[i + j] != content[fromIndex + j]) {
+                        found = false;
+                        break;
+                    }
+                }
+                if (found) {
+                    return i;
+                }
+            }
+            return -1;
+        }
+
+        private static byte[] concat(byte[] prefix, byte[] suffix, int suffixFrom, int suffixTo) {
+            final byte[] newArray = new byte[prefix.length + suffixTo - suffixFrom];
+            System.arraycopy(prefix, 0, newArray, 0, prefix.length);
+            System.arraycopy(suffix, suffixFrom, newArray, prefix.length, suffixTo - suffixFrom);
+            return newArray;
+        }
+
+        /**
+         * Manages and updates the data region.
+         * <p>
+         * Searches for the specified subarray within the existing data region. If the subarray
+         * is not found, it is appended to the data region. The subarray is defined as the
+         * portion of the {@code content} starting at {@code fromIndex} (inclusive)
+         * and ending at {@code toIndex} (exclusive).
+         * <p>
+         * @return The starting position of the subarray within the data region.
+         */
+        int maybeUpdateBytesImm(byte[] content, int fromIndex, int toIndex)
+                throws IllegalInstructionException {
+            int offsetInDataBytes = findMatchInDataBytes(content, fromIndex, toIndex);
             if (offsetInDataBytes == -1) {
                 offsetInDataBytes = mBytesImm.length;
-                mBytesImm = ByteUtils.concat(mBytesImm, content);
+                mBytesImm = concat(mBytesImm, content, fromIndex, toIndex);
                 // Update the length immediate (first imm) value. Due to mValue within
                 // IntImmediate being final, we must remove and re-add the value to apply changes.
                 mIntImms.remove(0);
@@ -543,7 +616,7 @@ public abstract class BaseApfGenerator {
             for (IntImmediate imm : mIntImms) {
                 size += imm.getEncodingSize(indeterminateSize);
             }
-            if (mTargetLabel != null) {
+            if (mTargetLabel != -1) {
                 size += indeterminateSize;
             }
             if (mBytesImm != null) {
@@ -558,7 +631,7 @@ public abstract class BaseApfGenerator {
          * @return {@code true} if shrunk.
          */
         boolean shrink() throws IllegalInstructionException {
-            if (mTargetLabel == null) {
+            if (mTargetLabel == -1) {
                 return false;
             }
             int oldTargetLabelSize = mTargetLabelSize;
@@ -618,7 +691,7 @@ public abstract class BaseApfGenerator {
                 writingOffset = mIntImms.get(startOffset++).writeValue(bytecode, writingOffset,
                         indeterminateSize);
             }
-            if (mTargetLabel != null) {
+            if (mTargetLabel != -1) {
                 writingOffset = writeValue(calculateTargetLabelOffset(), bytecode, writingOffset,
                         indeterminateSize);
             }
@@ -667,20 +740,18 @@ public abstract class BaseApfGenerator {
         }
 
         private int calculateTargetLabelOffset() throws IllegalInstructionException {
-            Instruction targetLabelInstruction;
-            if (mTargetLabel == DROP_LABEL) {
-                targetLabelInstruction = mDropLabel;
-            } else if (mTargetLabel == PASS_LABEL) {
-                targetLabelInstruction = mPassLabel;
+            int targetOffset;
+            if (mTargetLabel >= 0) {
+                targetOffset = mTotalSize + mTargetLabel;
             } else {
-                targetLabelInstruction = mLabels.get(mTargetLabel);
+                final Instruction targetLabelInstruction = mLabels.get(mTargetLabel);
+                if (targetLabelInstruction == null) {
+                    throw new IllegalInstructionException("label not found: " + mTargetLabel);
+                }
+                targetOffset = targetLabelInstruction.offset;
             }
-            if (targetLabelInstruction == null) {
-                throw new IllegalInstructionException("label not found: " + mTargetLabel);
-            }
-            // Calculate distance from end of this instruction to instruction.offset.
-            final int targetLabelOffset = targetLabelInstruction.offset - (offset + size());
-            return targetLabelOffset;
+            // Calculate distance from end of this instruction to targetOffset.
+            return targetOffset - (offset + size());
         }
     }
 
@@ -725,24 +796,12 @@ public abstract class BaseApfGenerator {
 
     void checkPassCounterRange(ApfCounterTracker.Counter cnt) {
         if (mDisableCounterRangeCheck) return;
-        if (cnt.value() < ApfCounterTracker.MIN_PASS_COUNTER.value()
-                || cnt.value() > ApfCounterTracker.MAX_PASS_COUNTER.value()) {
-            throw new IllegalArgumentException(
-                    String.format("Counter %s, is not in range [%s, %s]", cnt,
-                            ApfCounterTracker.MIN_PASS_COUNTER,
-                            ApfCounterTracker.MAX_PASS_COUNTER));
-        }
+        cnt.getJumpPassLabel();
     }
 
     void checkDropCounterRange(ApfCounterTracker.Counter cnt) {
         if (mDisableCounterRangeCheck) return;
-        if (cnt.value() < ApfCounterTracker.MIN_DROP_COUNTER.value()
-                || cnt.value() > ApfCounterTracker.MAX_DROP_COUNTER.value()) {
-            throw new IllegalArgumentException(
-                    String.format("Counter %s, is not in range [%s, %s]", cnt,
-                            ApfCounterTracker.MIN_DROP_COUNTER,
-                            ApfCounterTracker.MAX_DROP_COUNTER));
-        }
+        cnt.getJumpDropLabel();
     }
 
     /**
@@ -758,6 +817,8 @@ public abstract class BaseApfGenerator {
      */
     abstract void updateExceptionBufferSize(int programSize) throws IllegalInstructionException;
 
+    private int mTotalSize;
+
     /**
      * Generate the bytecode for the APF program.
      * @return the bytecode.
@@ -771,7 +832,6 @@ public abstract class BaseApfGenerator {
             throw new IllegalStateException("Can only generate() once!");
         }
         mGenerated = true;
-        int total_size;
         boolean shrunk;
         // Shrink the immediate value fields of instructions.
         // As we shrink the instructions some branch offset
@@ -781,10 +841,7 @@ public abstract class BaseApfGenerator {
         // Limit iterations to avoid O(n^2) behavior.
         int iterations_remaining = 10;
         do {
-            total_size = updateInstructionOffsets();
-            // Update drop and pass label offsets.
-            mDropLabel.offset = total_size + 1;
-            mPassLabel.offset = total_size;
+            mTotalSize = updateInstructionOffsets();
             // Limit run-time in aberant circumstances.
             if (iterations_remaining-- == 0) break;
             // Attempt to shrink instructions.
@@ -796,8 +853,8 @@ public abstract class BaseApfGenerator {
             }
         } while (shrunk);
         // Generate bytecode for instructions.
-        byte[] bytecode = new byte[total_size];
-        updateExceptionBufferSize(total_size);
+        byte[] bytecode = new byte[mTotalSize];
+        updateExceptionBufferSize(mTotalSize);
         for (Instruction instruction : mInstructions) {
             instruction.generate(bytecode);
         }
@@ -850,27 +907,30 @@ public abstract class BaseApfGenerator {
         }
     }
 
-    private int mLabelCount = 0;
+    private short mLabelCount = 0;
 
     /**
      * Return a unique label string.
      */
-    @VisibleForTesting
-    public String getUniqueLabel() {
-        return "LABEL_" + mLabelCount++;
+    public short getUniqueLabel() {
+        final short nextLabel = (short) -(2 + mLabelCount++);
+        if (nextLabel == Short.MIN_VALUE) {
+            throw new IllegalStateException("Running out of unique labels");
+        }
+        return nextLabel;
     }
 
     /**
      * Jump to this label to terminate the program and indicate the packet
      * should be dropped.
      */
-    public static final String DROP_LABEL = "__DROP__";
+    public static final short DROP_LABEL = 1;
 
     /**
      * Jump to this label to terminate the program and indicate the packet
      * should be passed to the AP.
      */
-    public static final String PASS_LABEL = "__PASS__";
+    public static final short PASS_LABEL = 0;
 
     /**
      * Number of memory slots available for access via APF stores to memory and loads from memory.
@@ -952,12 +1012,12 @@ public abstract class BaseApfGenerator {
     public static final int APF_VERSION_3 = 3;
     public static final int APF_VERSION_4 = 4;
     public static final int APF_VERSION_6 = 6000;
+    // TODO: update the version code once we finalized APFv6.1.
+    public static final int APF_VERSION_61 = 20250228;
 
 
     final ArrayList<Instruction> mInstructions = new ArrayList<Instruction>();
-    private final HashMap<String, Instruction> mLabels = new HashMap<String, Instruction>();
-    private final Instruction mDropLabel = new Instruction(Opcodes.LABEL);
-    private final Instruction mPassLabel = new Instruction(Opcodes.LABEL);
+    private final SparseArray<Instruction> mLabels = new SparseArray<>();
     public final int mVersion;
     public final int mRamSize;
     public final int mClampSize;
