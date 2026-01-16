@@ -16,11 +16,17 @@
 
 package android.net.apf;
 
+import static android.net.apf.ApfCounterTracker.Counter.APF_PROGRAM_ID;
+import static android.net.apf.ApfCounterTracker.Counter.FILTER_AGE_SECONDS;
+
+import android.annotation.NonNull;
 import android.util.ArrayMap;
 import android.util.Log;
+import android.util.Pair;
 
 import com.android.internal.annotations.VisibleForTesting;
 
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Map;
@@ -55,6 +61,7 @@ public class ApfCounterTracker {
         PASSED_ARP_REQUEST,
         PASSED_ARP_UNICAST_REPLY,
         PASSED_DHCP,
+        PASSED_DUE_TO_REPLY_OVER_MTU,
         PASSED_ETHER_OUR_SRC_MAC,
         PASSED_IPV4,
         PASSED_IPV4_FROM_DHCPV4_SERVER,
@@ -63,8 +70,10 @@ public class ApfCounterTracker {
         PASSED_IPV6_ICMP,
         PASSED_IPV6_NON_ICMP,
         PASSED_IPV6_UNICAST_NON_ICMP,
+        PASSED_LOW_POWER_STANDBY_MAGIC_PACKET,
         PASSED_NON_IP_UNICAST,
-        PASSED_MDNS, // see also MAX_PASS_COUNTER below
+        PASSED_MDNS,
+        PASSED_RA,  // see also MAX_PASS_COUNTER below
         DROPPED_ETH_BROADCAST,  // see also MIN_DROP_COUNTER below
         DROPPED_ETHER_OUR_SRC_MAC,
         DROPPED_RA,
@@ -107,6 +116,10 @@ public class ApfCounterTracker {
         DROPPED_IGMP_REPORT,
         DROPPED_GARP_REPLY;  // see also MAX_DROP_COUNTER below
 
+        // Cached count of the number of valid Counter enum values, excluding
+        // RESERVED_OOB. This avoids redundant and costly values() queries.
+        public static final int NUM_VALID_COUNTERS = values().length - 1;
+
         /**
          * Returns the negative byte offset from the end of the APF data segment for
          * a given counter.
@@ -127,7 +140,7 @@ public class ApfCounterTracker {
          * Returns the total size of the data segment in bytes.
          */
         public static int totalSize() {
-            return (Counter.class.getEnumConstants().length - 1) * 4;
+            return NUM_VALID_COUNTERS * 4;
         }
 
         /**
@@ -135,7 +148,7 @@ public class ApfCounterTracker {
          */
         @VisibleForTesting(visibility = VisibleForTesting.Visibility.PACKAGE)
         public static Counter getCounterEnumFromOffset(int offset) {
-            for (Counter cnt : Counter.class.getEnumConstants()) {
+            for (Counter cnt : Counter.values()) {
                 if (cnt.offset() == offset) {
                     return cnt;
                 }
@@ -173,7 +186,7 @@ public class ApfCounterTracker {
     public static final Counter MIN_DROP_COUNTER = Counter.DROPPED_ETH_BROADCAST;
     public static final Counter MAX_DROP_COUNTER = Counter.DROPPED_GARP_REPLY;
     public static final Counter MIN_PASS_COUNTER = Counter.PASSED_ARP_BROADCAST_REPLY;
-    public static final Counter MAX_PASS_COUNTER = Counter.PASSED_MDNS;
+    public static final Counter MAX_PASS_COUNTER = Counter.PASSED_RA;
 
     private static final String TAG = ApfCounterTracker.class.getSimpleName();
 
@@ -182,7 +195,7 @@ public class ApfCounterTracker {
     private final Map<Counter, Long> mCounters = new ArrayMap<>();
 
     public ApfCounterTracker() {
-        Counter[] counters = Counter.class.getEnumConstants();
+        Counter[] counters = Counter.values();
         mCounterList = Arrays.asList(counters).subList(1, counters.length);
     }
 
@@ -252,5 +265,85 @@ public class ApfCounterTracker {
      */
     public void clearCounters() {
         mCounters.clear();
+    }
+
+    /**
+     * Return readable counter for testing purposes.
+     */
+    public List<Pair<Counter, String>> dumpCountersFromData(
+            @NonNull byte[] data,
+            int filterAgeSeconds,
+            int numProgramUpdates,
+            int apfVersionSupported) throws ArrayIndexOutOfBoundsException {
+        List<Pair<Counter, String>> counterList = new ArrayList<>();
+        Counter[] counters = Counter.values();
+        long counterFilterAgeSeconds =
+                getCounterValue(data, FILTER_AGE_SECONDS);
+        long counterApfProgramId =
+                getCounterValue(data, APF_PROGRAM_ID);
+
+        for (Counter c : Arrays.asList(counters).subList(1, counters.length)) {
+            long value = getCounterValue(data, c);
+
+            String note = "";
+            boolean checkValueIncreases = true;
+            switch (c) {
+                case FILTER_AGE_SECONDS:
+                    checkValueIncreases = false;
+                    if (value != counterFilterAgeSeconds) {
+                        note = " [ERROR: impossible]";
+                    } else if (counterApfProgramId < numProgramUpdates) {
+                        note = " [IGNORE: obsolete program]";
+                    } else if (value > filterAgeSeconds) {
+                        long offset = value - filterAgeSeconds;
+                        note = " [ERROR: in the future by " + offset + "s]";
+                    }
+                    break;
+                case FILTER_AGE_16384THS:
+                    if (apfVersionSupported > BaseApfGenerator.APF_VERSION_4) {
+                        checkValueIncreases = false;
+                        if (value % 16384 == 0) {
+                            // valid, but unlikely
+                            note = " [INFO: zero fractional portion]";
+                        }
+                        if (value / 16384 != counterFilterAgeSeconds) {
+                            // should not be able to happen
+                            note = " [ERROR: mismatch with FILTER_AGE_SECONDS]";
+                        }
+                    } else if (value != 0) {
+                        note = " [UNEXPECTED: APF<=4, yet non-zero]";
+                    }
+                    break;
+                case APF_PROGRAM_ID:
+                    if (value != counterApfProgramId) {
+                        note = " [ERROR: impossible]";
+                    } else if (value < numProgramUpdates) {
+                        note = " [WARNING: OBSOLETE PROGRAM]";
+                    } else if (value > numProgramUpdates) {
+                        note = " [ERROR: INVALID FUTURE ID]";
+                    }
+                    break;
+                default:
+                    break;
+            }
+
+            // Only print non-zero counters (or those with a note)
+            if (value != 0 || !note.equals("")) {
+                counterList.add(new Pair<>(c, value + note));
+            }
+
+            if (checkValueIncreases) {
+                // If the counter's value decreases, it may have been cleaned up or there
+                // may be a bug.
+                long oldValue = getCounters().getOrDefault(c, 0L);
+                if (value < oldValue) {
+                    Log.e(TAG, String.format(
+                            "Apf Counter: %s unexpectedly decreased. oldValue: %d. "
+                            + "newValue: %d", c.toString(), oldValue, value));
+                }
+            }
+        }
+
+        return counterList;
     }
 }

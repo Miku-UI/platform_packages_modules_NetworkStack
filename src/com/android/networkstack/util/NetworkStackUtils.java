@@ -18,7 +18,6 @@ package com.android.networkstack.util;
 
 import static android.net.apf.ApfConstants.IPV6_SOLICITED_NODES_PREFIX;
 import static android.os.Build.VERSION.CODENAME;
-import static android.os.Build.VERSION.SDK_INT;
 import static android.system.OsConstants.IFA_F_DEPRECATED;
 import static android.system.OsConstants.IFA_F_TENTATIVE;
 
@@ -30,7 +29,6 @@ import android.net.MacAddress;
 import android.system.ErrnoException;
 import android.util.Log;
 
-import androidx.annotation.ChecksSdkIntAtLeast;
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
 
@@ -231,17 +229,22 @@ public class NetworkStackUtils {
             "networkmonitor_async_privdns_resolution";
 
     /**
-     * Experiment flag to populate the IP link address lifetime such as deprecationTime and
-     * expirationtTime.
+     * Feature flag to always use the CAPPORT data when doing fallback to cellular.
      */
-    public static final String IPCLIENT_POPULATE_LINK_ADDRESS_LIFETIME_VERSION =
-            "ipclient_populate_link_address_lifetime_version";
+    public static final String NETWORKMONITOR_USE_CAPPORT_DATA_IN_FALLBACK =
+            "networkmonitor_use_capport_data_in_fallback";
 
     /**
      * Experiment flag to support parsing PIO P flag(DHCPv6-PD preferred).
      */
     public static final String IPCLIENT_DHCPV6_PD_PREFERRED_FLAG_VERSION =
             "ipclient_dhcpv6_pd_preferred_flag_version";
+
+    /**
+     * Experiment flag to support the self-generated IPv6 address registration using DHCPv6.
+     */
+    public static final String IPCLIENT_DHCPV6_ADDR_REGISTER_VERSION =
+            "ipclient_dhcpv6_addr_register_version";
 
     /**
      * Experiment flag to replace INetd usage with netlink in IpClient.
@@ -284,6 +287,12 @@ public class NetworkStackUtils {
      */
     public static final String APF_HANDLE_MLD_OFFLOAD_VERSION =
             "apf_handle_mld_offload_version";
+
+    /**
+     * Experiment flag to enable the feature of handle MDNS advertising offload in Apf.
+     */
+    public static final String APF_HANDLE_MDNS_ADVERTISING_OFFLOAD_VERSION =
+            "apf_handle_mdns_advertising_offload_version";
 
     /**** BEGIN Feature Kill Switch Flags ****/
 
@@ -463,12 +472,6 @@ public class NetworkStackUtils {
         }
     }
 
-    /** Checks if the device is running on a release version of Android Baklava or newer */
-    @ChecksSdkIntAtLeast(api = 36 /* BUILD_VERSION_CODES.Baklava */)
-    public static boolean isAtLeast25Q2() {
-        return SDK_INT >= 36 || (SDK_INT == 35 && isAtLeastPreReleaseCodename("Baklava"));
-    }
-
     private static boolean isAtLeastPreReleaseCodename(@NonNull String codename) {
         // Special case "REL", which means the build is not a pre-release build.
         if ("REL".equals(CODENAME)) {
@@ -536,22 +539,32 @@ public class NetworkStackUtils {
     public static native void attachControlPacketFilter(FileDescriptor fd) throws ErrnoException;
 
     /**
+     * Get the APF capabilities for the specified interface through Non-HAL API.
+     * @return a long containing two 32-bit integers: the APF version (lower 32-bit) and the APF
+     *         RAM size (upper 32-bit), or -1 if not supported.
+     */
+    public static native long getApfCapabilities(@NonNull String ifName)
+            throws ErrnoException;
+
+    /**
+     * Install APF program on the specified interface through Non-HAL API.
+     */
+    public static native void installPacketFilter(@NonNull String ifName, @NonNull byte[] filter)
+            throws ErrnoException;
+
+    /**
+     * Read the APF RAM from the specified interface through Non-HAL API.
+     */
+    public static native boolean readPacketFilterRam(@NonNull String ifName, @NonNull byte[] output)
+            throws ErrnoException;
+
+    /**
      * Add an entry into the ARP cache.
      */
     public static void addArpEntry(Inet4Address ipv4Addr, android.net.MacAddress ethAddr,
             String ifname, FileDescriptor fd) throws IOException {
         addArpEntry(ethAddr.toByteArray(), ipv4Addr.getAddress(), ifname, fd);
     }
-
-    /**
-     * Attaches a socket filter that accepts egress IGMPv2/IGMPv3 reports to the given socket.
-     *
-     * This filter doesn't include IGMPv1 report since device will not send out IGMPv1 report
-     * when the device leaves a multicast address group.
-     *
-     * @param fd the socket's {@link FileDescriptor}.
-     */
-    public static native void attachEgressIgmpReportFilter(FileDescriptor fd) throws ErrnoException;
 
     /**
      * Attaches a socket filter that accepts egress IGMPv2/v3, MLDv1/v2 reports to the given socket.

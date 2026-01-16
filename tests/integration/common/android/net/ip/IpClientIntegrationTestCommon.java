@@ -85,7 +85,7 @@ import static com.android.net.module.util.NetworkStackConstants.NEIGHBOR_ADVERTI
 import static com.android.net.module.util.NetworkStackConstants.NEIGHBOR_ADVERTISEMENT_FLAG_SOLICITED;
 import static com.android.net.module.util.NetworkStackConstants.PIO_FLAG_AUTONOMOUS;
 import static com.android.net.module.util.NetworkStackConstants.PIO_FLAG_ON_LINK;
-import static com.android.networkstack.util.NetworkStackUtils.IPCLIENT_POPULATE_LINK_ADDRESS_LIFETIME_VERSION;
+import static com.android.networkstack.util.NetworkStackUtils.IPCLIENT_DHCPV6_PD_PREFERRED_FLAG_VERSION;
 import static com.android.networkstack.util.NetworkStackUtils.IP_REACHABILITY_IGNORE_NUD_FAILURE_VERSION;
 import static com.android.networkstack.util.NetworkStackUtils.IP_REACHABILITY_IGNORE_ORGANIC_NUD_FAILURE_VERSION;
 import static com.android.networkstack.util.NetworkStackUtils.IP_REACHABILITY_ROUTER_MAC_CHANGE_FAILURE_ONLY_AFTER_ROAM_VERSION;
@@ -162,13 +162,9 @@ import android.net.dhcp.DhcpDiscoverPacket;
 import android.net.dhcp.DhcpPacket;
 import android.net.dhcp.DhcpPacket.ParseException;
 import android.net.dhcp.DhcpRequestPacket;
+import android.net.dhcp6.Dhcp6AddrRegTracker;
 import android.net.dhcp6.Dhcp6Client;
-import android.net.dhcp6.Dhcp6Packet;
-import android.net.dhcp6.Dhcp6Packet.PrefixDelegation;
-import android.net.dhcp6.Dhcp6RebindPacket;
-import android.net.dhcp6.Dhcp6RenewPacket;
-import android.net.dhcp6.Dhcp6RequestPacket;
-import android.net.dhcp6.Dhcp6SolicitPacket;
+import android.net.dhcp6.Dhcp6PacketDispatcher;
 import android.net.ipmemorystore.NetworkAttributes;
 import android.net.ipmemorystore.OnNetworkAttributesRetrievedListener;
 import android.net.ipmemorystore.OnNetworkEventCountRetrievedListener;
@@ -190,6 +186,7 @@ import android.os.ParcelFileDescriptor;
 import android.os.PowerManager;
 import android.os.RemoteException;
 import android.os.SystemClock;
+import android.platform.test.annotations.EnableFlags;
 import android.provider.Settings;
 import android.stats.connectivity.NudEventType;
 import android.system.ErrnoException;
@@ -211,6 +208,12 @@ import com.android.net.module.util.PacketBuilder;
 import com.android.net.module.util.SharedLog;
 import com.android.net.module.util.Struct;
 import com.android.net.module.util.arp.ArpPacket;
+import com.android.net.module.util.dhcp6.Dhcp6Packet;
+import com.android.net.module.util.dhcp6.Dhcp6Packet.PrefixDelegation;
+import com.android.net.module.util.dhcp6.Dhcp6RebindPacket;
+import com.android.net.module.util.dhcp6.Dhcp6RenewPacket;
+import com.android.net.module.util.dhcp6.Dhcp6RequestPacket;
+import com.android.net.module.util.dhcp6.Dhcp6SolicitPacket;
 import com.android.net.module.util.ip.IpNeighborMonitor;
 import com.android.net.module.util.ip.IpNeighborMonitor.NeighborEventConsumer;
 import com.android.net.module.util.netlink.NetlinkUtils;
@@ -224,6 +227,7 @@ import com.android.net.module.util.structs.RdnssOption;
 import com.android.networkstack.R;
 import com.android.networkstack.apishim.CaptivePortalDataShimImpl;
 import com.android.networkstack.ipmemorystore.IpMemoryStoreService;
+import com.android.networkstack.mainline.beta.Flags;
 import com.android.networkstack.metrics.IpProvisioningMetrics;
 import com.android.networkstack.metrics.IpReachabilityMonitorMetrics;
 import com.android.networkstack.metrics.NetworkQuirkMetrics;
@@ -232,6 +236,7 @@ import com.android.networkstack.packets.NeighborSolicitation;
 import com.android.networkstack.util.NetworkStackUtils;
 import com.android.server.NetworkStackService.NetworkStackServiceManager;
 import com.android.testutils.CompatUtil;
+import com.android.testutils.ConnectivityDiagnosticsCollector;
 import com.android.testutils.DevSdkIgnoreRule;
 import com.android.testutils.DevSdkIgnoreRule.IgnoreUpTo;
 import com.android.testutils.HandlerUtils;
@@ -322,6 +327,15 @@ public abstract class IpClientIntegrationTestCommon {
     private static final int TEST_ARP_LOCKTIME_MS = 1500;
     private static final int TEST_DELAY_FIRST_PROBE_TIME_S = 2;
 
+    private static final byte TEST_PIO_FLAGS_P_UNSET = (byte) 0xC0; // L=1,A=1,R=0,P=0
+    private static final byte TEST_PIO_FLAGS_P_SET = (byte) 0xD0;   // L=1,A=1,R=0,P=1
+
+    // Note that this test contains @EnableFlags annotations but no SetFlagsRule. This is because
+    // this test is run with both an in-process (IpClientSignatureTest) and
+    // out-of-process (IpClientRootTest) IpClient instance. Only the in-process test is able to
+    // properly set the flags, so the SetFlagsRule is part of the IpClientSignatureTest subclass.
+    // The IpClientRootTest uses a custom rule that optionally skips tests based on the @EnableFlags
+    // values without actually enabling them (similar to the existing CheckFlagsRule).
     @Rule
     public final DevSdkIgnoreRule mIgnoreRule = new DevSdkIgnoreRule();
     @Rule
@@ -375,6 +389,7 @@ public abstract class IpClientIntegrationTestCommon {
     @Mock private IpReachabilityMonitorMetrics mIpReachabilityMonitorMetrics;
     @Mock private DevicePolicyManager mDevicePolicyManager;
     @Mock private PackageManager mPackageManager;
+    @Mock private Dhcp6AddrRegTracker mDhcp6AddrRegTracker;
     @Spy private INetd mNetd;
 
     protected IpClient mIpc;
@@ -445,7 +460,9 @@ public abstract class IpClientIntegrationTestCommon {
     private static final String IPV4_ANY_ADDRESS_PREFIX = "0.0.0.0/0";
     private static final String HOSTNAME = "testhostname";
     private static final String TEST_IPV6_PREFIX = "2001:db8:1::/64";
+    private static final String TEST_IPV6_ULA_PREFIX = "fd00:1234:5678:9abc::/64";
     private static final String IPV6_OFF_LINK_DNS_SERVER = "2001:4860:4860::64";
+    private static final String TEST_DHCP6_DELEGATED_PREFIX = "2001:db8:dead:beef::/64";
     private static final String IPV6_ON_LINK_DNS_SERVER = "2001:db8:1::64";
     private static final int TEST_DEFAULT_MTU = 1500;
     private static final int TEST_MIN_MTU = 1280;
@@ -534,8 +551,10 @@ public abstract class IpClientIntegrationTestCommon {
 
         @Override
         public Dhcp6Client makeDhcp6Client(Context context, StateMachine controller,
-                InterfaceParams ifParams, Dhcp6Client.Dependencies deps) {
-            mDhcp6Client = Dhcp6Client.makeDhcp6Client(context, controller, ifParams, deps);
+                InterfaceParams ifParams, Dhcp6PacketDispatcher dispatcher,
+                Dhcp6Client.Dependencies deps) {
+            mDhcp6Client =
+                    Dhcp6Client.makeDhcp6Client(context, controller, ifParams, dispatcher, deps);
             return mDhcp6Client;
         }
 
@@ -653,6 +672,12 @@ public abstract class IpClientIntegrationTestCommon {
         @Override
         public NetworkQuirkMetrics getNetworkQuirkMetrics() {
             return new NetworkQuirkMetrics(mNetworkQuirkMetricsDeps);
+        }
+
+        @Override
+        public Dhcp6AddrRegTracker makeDhcp6AddrRegTracker(Context context, Handler handler,
+                String ifName, Dhcp6PacketDispatcher dispatcher) {
+            return mDhcp6AddrRegTracker;
         }
     }
 
@@ -1523,7 +1548,7 @@ public abstract class IpClientIntegrationTestCommon {
 
         if (shouldChangeMtu) {
             // Pretend that ConnectivityService set the MTU.
-            NetlinkUtils.setInterfaceMtu(mIfaceName, mtu);
+            NetlinkUtils.setInterfaceMtu(mDependencies.getInterfaceParams(mIfaceName).index, mtu);
             assertEquals(NetworkInterface.getByName(mIfaceName).getMTU(), mtu);
         }
 
@@ -2042,7 +2067,8 @@ public abstract class IpClientIntegrationTestCommon {
         assertIpMemoryStoreNetworkAttributes(TEST_LEASE_DURATION_S, currentTime, TEST_MIN_MTU);
 
         // Pretend that ConnectivityService set the MTU.
-        NetlinkUtils.setInterfaceMtu(mIfaceName, TEST_MIN_MTU);
+        NetlinkUtils.setInterfaceMtu(
+                mDependencies.getInterfaceParams(mIfaceName).index, TEST_MIN_MTU);
         assertEquals(NetworkInterface.getByName(mIfaceName).getMTU(), TEST_MIN_MTU);
 
         reset(mCb);
@@ -2173,8 +2199,13 @@ public abstract class IpClientIntegrationTestCommon {
     // TODO: move this and the following method to a common location and use them in ApfTest.
     private static ByteBuffer buildPioOption(int valid, int preferred, String prefixString)
             throws Exception {
-        return PrefixInformationOption.build(new IpPrefix(prefixString),
-                (byte) (PIO_FLAG_ON_LINK | PIO_FLAG_AUTONOMOUS), valid, preferred);
+        return buildPioOption(valid, preferred, (byte) (PIO_FLAG_ON_LINK | PIO_FLAG_AUTONOMOUS),
+                prefixString);
+    }
+
+    private static ByteBuffer buildPioOption(int valid, int preferred, byte flags,
+            String prefixString) throws Exception {
+        return PrefixInformationOption.build(new IpPrefix(prefixString), flags, valid, preferred);
     }
 
     private static ByteBuffer buildRdnssOption(int lifetime, String... servers) throws Exception {
@@ -2251,6 +2282,13 @@ public abstract class IpClientIntegrationTestCommon {
 
     private LinkProperties doIpv6OnlyProvisioning(InOrder inOrder, ByteBuffer ra) throws Exception {
         waitForRouterSolicitation();
+        // Waiting for the IPv6 link-local address to appear, which ensures that the IPv6 stack
+        // is enabled and can process Router Advertisements.
+        // TODO: why this is only required for certain platform (see b/428036745). Otherwise, it
+        // seems that the kernel missed the RA and failed to get the default IPv6 route.
+        verify(mCb, timeout(TEST_TIMEOUT_MS)).onLinkPropertiesChange(argThat(
+                x -> hasIpv6LinkLocalAddress(x)
+        ));
         mPacketReader.sendResponse(ra);
 
         // The lambda below needs to write a LinkProperties to a local variable, but lambdas cannot
@@ -4984,7 +5022,9 @@ public abstract class IpClientIntegrationTestCommon {
         verify(mCb, timeout(TEST_TIMEOUT_MS)).setNeighborDiscoveryOffload(true);
     }
 
-    @Test @SignatureRequiredTest(reason = "requires mock callback object")
+    @ConnectivityDiagnosticsCollector.CollectTcpdumpOnFailure
+    @Test
+    @SignatureRequiredTest(reason = "requires mock callback object")
     public void testNetlinkSocketReceiveENOBUFS() throws Exception {
         ProvisioningConfiguration config = new ProvisioningConfiguration.Builder()
                 .withoutIPv4()
@@ -5282,7 +5322,7 @@ public abstract class IpClientIntegrationTestCommon {
         ByteBuffer iapd;
         Dhcp6Packet packet;
         while ((packet = getNextDhcp6Packet()) != null) {
-            final PrefixDelegation pd = new PrefixDelegation(packet.getIaId(), t1, t2, ipos);
+            final PrefixDelegation pd = new PrefixDelegation(packet.getIaid(), t1, t2, ipos);
             iapd = pd.build();
             if (packet instanceof Dhcp6SolicitPacket) {
                 if (shouldReplyRapidCommit) {
@@ -5306,10 +5346,22 @@ public abstract class IpClientIntegrationTestCommon {
         fail("No DHCPv6 packet received on interface within timeout");
     }
 
+    private static boolean hasIpv6LinkLocalAddress(final LinkProperties lp) {
+        for (LinkAddress address : lp.getLinkAddresses()) {
+            if (address.isIpv6() && address.getAddress().isLinkLocalAddress()) {
+                return true;
+            }
+        }
+        return false;
+    }
+
     private void prepareDhcp6PdTest() throws Exception {
         final String dnsServer = "2001:4860:4860::64";
         final ByteBuffer rdnss = buildRdnssOption(3600, dnsServer);
-        final ByteBuffer ra = buildRaPacket(rdnss);
+        final ByteBuffer pio = buildPioOption(3600 /* valid */, 1800 /* preferred */,
+                (byte) PIO_FLAG_ON_LINK, TEST_IPV6_PREFIX);
+        final ByteBuffer slla = buildSllaOption();
+        final ByteBuffer ra = buildRaPacket(pio, rdnss, slla);
 
         ProvisioningConfiguration config = new ProvisioningConfiguration.Builder()
                 .withoutIPv4()
@@ -5317,11 +5369,18 @@ public abstract class IpClientIntegrationTestCommon {
         startIpClientProvisioning(config);
 
         waitForRouterSolicitation();
+
+        // Waiting for the IPv6 link-local address to appear, which ensures that the IPv6 stack
+        // is enabled and can process Router Advertisements.
+        verify(mCb, timeout(TEST_TIMEOUT_MS)).onLinkPropertiesChange(argThat(
+                x -> hasIpv6LinkLocalAddress(x)
+        ));
         mPacketReader.sendResponse(ra);
     }
 
+    @ConnectivityDiagnosticsCollector.CollectTcpdumpOnFailure
     @Test
-    @Flag(name =  IPCLIENT_POPULATE_LINK_ADDRESS_LIFETIME_VERSION, enabled = true)
+    @EnableFlags(Flags.FLAG_IPCLIENT_POPULATE_LINK_ADDRESS_LIFETIME)
     public void testDhcp6Pd() throws Exception {
         final IpPrefix prefix = new IpPrefix("2001:db8:1::/64");
         prepareDhcp6PdTest();
@@ -5598,7 +5657,7 @@ public abstract class IpClientIntegrationTestCommon {
                 7200 /* valid */);
         final IaPrefixOption ipo1 = buildIaPrefixOption(prefix1, 5000 /* preferred */,
                 6000 /* valid */);
-        final PrefixDelegation pd = new PrefixDelegation(packet.getIaId(), 3600 /* t1 */,
+        final PrefixDelegation pd = new PrefixDelegation(packet.getIaid(), 3600 /* t1 */,
                 4500 /* t2 */, Arrays.asList(ipo, ipo1));
         final ByteBuffer iapd = pd.build();
         mPacketReader.sendResponse(buildDhcp6Reply(packet, iapd.array(), mClientMac,
@@ -5636,7 +5695,7 @@ public abstract class IpClientIntegrationTestCommon {
         final IpPrefix prefix1 = new IpPrefix("2001:db8:2::/64");
         final IaPrefixOption ipo = buildIaPrefixOption(prefix1, 4500 /* preferred */,
                 7200 /* valid */);
-        final PrefixDelegation pd = new PrefixDelegation(packet.getIaId(), 3600 /* t1 */,
+        final PrefixDelegation pd = new PrefixDelegation(packet.getIaid(), 3600 /* t1 */,
                 4500 /* t2 */, Arrays.asList(ipo));
         final ByteBuffer iapd = pd.build();
         mPacketReader.sendResponse(buildDhcp6Reply(packet, iapd.array(), mClientMac,
@@ -5672,7 +5731,7 @@ public abstract class IpClientIntegrationTestCommon {
 
         // Reply with IA_PD but IA_Prefix is absent, client should still stay at the RenewState
         // and restransmit the Renew message, that should not result in any LinkProperties update.
-        final PrefixDelegation pd = new PrefixDelegation(packet.getIaId(), 3600 /* t1 */,
+        final PrefixDelegation pd = new PrefixDelegation(packet.getIaid(), 3600 /* t1 */,
                 4500 /* t2 */, new ArrayList<IaPrefixOption>(0));
         final ByteBuffer iapd = pd.build();
         mPacketReader.sendResponse(buildDhcp6Reply(packet, iapd.array(), mClientMac,
@@ -5702,7 +5761,7 @@ public abstract class IpClientIntegrationTestCommon {
                 0 /* valid */);
         final IaPrefixOption ipo1 = buildIaPrefixOption(prefix1, 5000 /* preferred */,
                 6000 /* valid */);
-        final PrefixDelegation pd = new PrefixDelegation(packet.getIaId(), 3600 /* t1 */,
+        final PrefixDelegation pd = new PrefixDelegation(packet.getIaid(), 3600 /* t1 */,
                 4500 /* t2 */, Arrays.asList(ipo, ipo1));
         final ByteBuffer iapd = pd.build();
         mPacketReader.sendResponse(buildDhcp6Reply(packet, iapd.array(), mClientMac,
@@ -5751,7 +5810,7 @@ public abstract class IpClientIntegrationTestCommon {
         final IpPrefix prefix = new IpPrefix("2001:db8:1::/64");
         final IaPrefixOption ipo = buildIaPrefixOption(prefix, 3600 /* preferred */,
                 3600 /* valid */);
-        final PrefixDelegation pd = new PrefixDelegation(packet.getIaId(), 3600 /* t1 */,
+        final PrefixDelegation pd = new PrefixDelegation(packet.getIaid(), 3600 /* t1 */,
                 3600 /* t2 */, Collections.singletonList(ipo));
         final ByteBuffer iapd = pd.build();
         mPacketReader.sendResponse(buildDhcp6Reply(packet, iapd.array(), mClientMac,
@@ -5768,6 +5827,7 @@ public abstract class IpClientIntegrationTestCommon {
         assertNull(packet);
     }
 
+    @ConnectivityDiagnosticsCollector.CollectTcpdumpOnFailure
     @Test
     public void testDhcp6Pd_multipleIaPrefixOptions() throws Exception {
         final InOrder inOrder = inOrder(mCb);
@@ -5817,7 +5877,7 @@ public abstract class IpClientIntegrationTestCommon {
         Dhcp6Packet packet = getNextDhcp6Packet(PACKET_TIMEOUT_MS);
         assertTrue(packet instanceof Dhcp6SolicitPacket);
 
-        final PrefixDelegation pd = new PrefixDelegation(packet.getIaId(), 0 /* t1 */, 0 /* t2 */,
+        final PrefixDelegation pd = new PrefixDelegation(packet.getIaid(), 0 /* t1 */, 0 /* t2 */,
                 new ArrayList<IaPrefixOption>() /* ipos */, Dhcp6Packet.STATUS_NO_PREFIX_AVAIL);
         final ByteBuffer iapd = pd.build();
         if (shouldReplyWithAdvertise) {
@@ -5855,7 +5915,7 @@ public abstract class IpClientIntegrationTestCommon {
         final IpPrefix prefix = new IpPrefix("2001:db8:1::/64");
         final IaPrefixOption ipo = buildIaPrefixOption(prefix, 4500 /* preferred */,
                 7200 /* valid */);
-        PrefixDelegation pd = new PrefixDelegation(packet.getIaId(), 1000 /* t1 */,
+        PrefixDelegation pd = new PrefixDelegation(packet.getIaid(), 1000 /* t1 */,
                 2000 /* t2 */, Arrays.asList(ipo));
         ByteBuffer iapd = pd.build();
         mPacketReader.sendResponse(buildDhcp6Advertise(packet, iapd.array(), mClientMac,
@@ -5866,7 +5926,7 @@ public abstract class IpClientIntegrationTestCommon {
 
         // Reply for Request with NoPrefixAvail status code. Not sure if this is reasonable in
         // practice, but Server can do everything it wants.
-        pd = new PrefixDelegation(packet.getIaId(), 0 /* t1 */, 0 /* t2 */,
+        pd = new PrefixDelegation(packet.getIaid(), 0 /* t1 */, 0 /* t2 */,
                 new ArrayList<IaPrefixOption>() /* ipos */, Dhcp6Packet.STATUS_NO_PREFIX_AVAIL);
         iapd = pd.build();
         mPacketReader.sendResponse(buildDhcp6Reply(packet, iapd.array(), mClientMac,
@@ -5897,7 +5957,7 @@ public abstract class IpClientIntegrationTestCommon {
         final IpPrefix prefix = new IpPrefix("2001:db8:1::/64");
         final IaPrefixOption ipo = buildIaPrefixOption(prefix, 4500 /* preferred */,
                 7200 /* valid */);
-        PrefixDelegation pd = new PrefixDelegation(packet.getIaId(), 1000 /* t1 */,
+        PrefixDelegation pd = new PrefixDelegation(packet.getIaid(), 1000 /* t1 */,
                 2000 /* t2 */, Arrays.asList(ipo));
         ByteBuffer iapd = pd.build();
         mPacketReader.sendResponse(buildDhcp6Reply(packet, iapd.array(), mClientMac,
@@ -5913,7 +5973,7 @@ public abstract class IpClientIntegrationTestCommon {
 
         // Reply for Renew with NoPrefixAvail status code, check if client will retransmit the
         // Renew message.
-        pd = new PrefixDelegation(packet.getIaId(), 3600 /* t1 */, 4500 /* t2 */,
+        pd = new PrefixDelegation(packet.getIaid(), 3600 /* t1 */, 4500 /* t2 */,
                 new ArrayList<IaPrefixOption>(0) /* ipos */, Dhcp6Packet.STATUS_NO_PREFIX_AVAIL);
         iapd = pd.build();
         mPacketReader.sendResponse(buildDhcp6Reply(packet, iapd.array(), mClientMac,
@@ -5949,7 +6009,7 @@ public abstract class IpClientIntegrationTestCommon {
         final IpPrefix prefix = new IpPrefix("2001:db8:1::/64");
         final IaPrefixOption ipo = buildIaPrefixOption(prefix, 4500 /* preferred */,
                 7200 /* valid */);
-        PrefixDelegation pd = new PrefixDelegation(packet.getIaId(), 1000 /* t1 */,
+        PrefixDelegation pd = new PrefixDelegation(packet.getIaid(), 1000 /* t1 */,
                 2000 /* t2 */, Arrays.asList(ipo));
         ByteBuffer iapd = pd.build();
         mPacketReader.sendResponse(buildDhcp6Reply(packet, iapd.array(), mClientMac,
@@ -5971,7 +6031,7 @@ public abstract class IpClientIntegrationTestCommon {
 
         // Reply for Rebind with NoPrefixAvail status code, check if client will retransmit the
         // Rebind message.
-        pd = new PrefixDelegation(packet.getIaId(), 3600 /* t1 */,
+        pd = new PrefixDelegation(packet.getIaid(), 3600 /* t1 */,
                 4500 /* t2 */, new ArrayList<IaPrefixOption>(0) /* ipos */,
                 Dhcp6Packet.STATUS_NO_PREFIX_AVAIL);
         iapd = pd.build();
@@ -6108,7 +6168,7 @@ public abstract class IpClientIntegrationTestCommon {
     }
 
     @Test
-    @Flag(name = IPCLIENT_POPULATE_LINK_ADDRESS_LIFETIME_VERSION, enabled = true)
+    @EnableFlags(Flags.FLAG_IPCLIENT_POPULATE_LINK_ADDRESS_LIFETIME)
     public void testPopulateLinkAddressLifetime() throws Exception {
         final LinkProperties lp = doDualStackProvisioning();
         final long now = SystemClock.elapsedRealtime();
@@ -6130,7 +6190,7 @@ public abstract class IpClientIntegrationTestCommon {
     }
 
     @Test
-    @Flag(name = IPCLIENT_POPULATE_LINK_ADDRESS_LIFETIME_VERSION, enabled = true)
+    @EnableFlags(Flags.FLAG_IPCLIENT_POPULATE_LINK_ADDRESS_LIFETIME)
     public void testPopulateLinkAddressLifetime_infiniteLeaseDuration() throws Exception {
         final ProvisioningConfiguration cfg = new ProvisioningConfiguration.Builder()
                 .withoutIPv6()
@@ -6154,7 +6214,7 @@ public abstract class IpClientIntegrationTestCommon {
     }
 
     @Test
-    @Flag(name = IPCLIENT_POPULATE_LINK_ADDRESS_LIFETIME_VERSION, enabled = true)
+    @EnableFlags(Flags.FLAG_IPCLIENT_POPULATE_LINK_ADDRESS_LIFETIME)
     public void testPopulateLinkAddressLifetime_minimalLeaseDuration() throws Exception {
         final ProvisioningConfiguration cfg = new ProvisioningConfiguration.Builder()
                 .withoutIPv6()
@@ -6181,7 +6241,7 @@ public abstract class IpClientIntegrationTestCommon {
     }
 
     @Test
-    @Flag(name = IPCLIENT_POPULATE_LINK_ADDRESS_LIFETIME_VERSION, enabled = true)
+    @EnableFlags(Flags.FLAG_IPCLIENT_POPULATE_LINK_ADDRESS_LIFETIME)
     public void testPopulateLinkAddressLifetime_onDhcpRenew() throws Exception {
         final ProvisioningConfiguration cfg = new ProvisioningConfiguration.Builder()
                 .withoutIPv6()
@@ -6510,5 +6570,109 @@ public abstract class IpClientIntegrationTestCommon {
         // event count should be 10.
         assertRetrievedNetworkEventCount(TEST_CLUSTER, 10 /* expectedCountInPastWeek */,
                 10 /* expectedCountInPastDay */, 10 /* expectedCountInPastSixHours */);
+    }
+
+    private void prepareDhcp6PrefixDelegationPreferredFlagTests(byte flags, boolean hasUlaPio)
+            throws Exception {
+        // DHCPv6 prefix delegation preferred flag relevant test cases require the kernel to support
+        // "ra_honor_pio_pflag" sysctl, which lands since 6.12 kernel version.
+        final String ra_honor_pio_flag =
+                "/proc/sys/net/ipv6/conf/" + mIfaceName + "/ra_honor_pio_pflag";
+        assumeTrue(new File(ra_honor_pio_flag).exists());
+
+        final List<ByteBuffer> options = new ArrayList<>();
+        final ByteBuffer pio =
+                buildPioOption(3600 /* valid */, 1800 /* preferred */, flags, TEST_IPV6_PREFIX);
+        final ByteBuffer ulaPio =
+                buildPioOption(200 /* valid */, 100 /* preferred */, TEST_IPV6_ULA_PREFIX);
+        final ByteBuffer rdnss = buildRdnssOption(3600, IPV6_OFF_LINK_DNS_SERVER);
+        options.add(pio);
+        if (hasUlaPio) options.add(ulaPio);
+        options.add(rdnss);
+        final ByteBuffer ra = buildRaPacket(options.toArray(new ByteBuffer[options.size()]));
+
+        ProvisioningConfiguration config = new ProvisioningConfiguration.Builder()
+                .withoutIPv4()
+                .build();
+        startIpClientProvisioning(config);
+
+        waitForRouterSolicitation();
+        mPacketReader.sendResponse(ra);
+    }
+
+    @Test
+    @Flag(name = IPCLIENT_DHCPV6_PD_PREFERRED_FLAG_VERSION, enabled = true)
+    public void testDhcp6PrefixDelegationPreferred() throws Exception {
+        prepareDhcp6PrefixDelegationPreferredFlagTests(TEST_PIO_FLAGS_P_SET, false /* hasUlaPio */);
+
+        // Verify that DHCPv6 Prefix Delegation should be used for IPv6 provisioning when P bit
+        // is set in the PIO, and device should ignore the A bit and haven't any SLAAC address
+        // derived from that on-link prefix.
+        final IpPrefix delegatedPrefix = new IpPrefix(TEST_DHCP6_DELEGATED_PREFIX);
+        handleDhcp6Packets(delegatedPrefix, true /* shouldReplyRapidCommit */);
+        final ArgumentCaptor<LinkProperties> captor = ArgumentCaptor.forClass(LinkProperties.class);
+        verify(mCb, timeout(TEST_TIMEOUT_MS)).onProvisioningSuccess(captor.capture());
+        final LinkProperties lp = captor.getValue();
+        assertTrue(hasIpv6AddressPrefixedWith(lp, delegatedPrefix));
+        assertFalse(hasIpv6AddressPrefixedWith(lp, new IpPrefix(TEST_IPV6_PREFIX)));
+    }
+
+    @Test
+    @Flag(name = IPCLIENT_DHCPV6_PD_PREFERRED_FLAG_VERSION, enabled = true)
+    public void testDhcp6PrefixDelegationPreferred_withoutPFlag() throws Exception {
+        prepareDhcp6PrefixDelegationPreferredFlagTests(TEST_PIO_FLAGS_P_UNSET,
+                false /* hasUlaPio */);
+
+        // Verify that DHCPv6 Prefix Delegation should not be used for IPv6 provisioning when P bit
+        // is not set in the PIO, and device should do SLAAC based on the on-link prefix in PIO.
+        assertNull(getNextDhcp6Packet(PACKET_TIMEOUT_MS));
+        final ArgumentCaptor<LinkProperties> captor = ArgumentCaptor.forClass(LinkProperties.class);
+        verify(mCb, timeout(TEST_TIMEOUT_MS)).onProvisioningSuccess(captor.capture());
+        final LinkProperties lp = captor.getValue();
+        assertTrue(hasIpv6AddressPrefixedWith(lp, new IpPrefix(TEST_IPV6_PREFIX)));
+        assertFalse(hasIpv6AddressPrefixedWith(lp, new IpPrefix(TEST_DHCP6_DELEGATED_PREFIX)));
+    }
+
+    @Test
+    @Flag(name = IPCLIENT_DHCPV6_PD_PREFERRED_FLAG_VERSION, enabled = true)
+    public void testDhcp6PrefixDelegationPreferred_multiplePiosWithPFlag() throws Exception {
+        prepareDhcp6PrefixDelegationPreferredFlagTests(TEST_PIO_FLAGS_P_SET, true /* hasUlaPio */);
+
+        // Verify that DHCPv6 Prefix Delegation should be used for IPv6 provisioning when the
+        // P bit is set in the PIO, apart of that, RA also includes a PIO with ULA prefix, so
+        // the device ignore the A bit in the PIO and have the ULA address based on the ULA prefix.
+        final IpPrefix delegatedPrefix = new IpPrefix(TEST_DHCP6_DELEGATED_PREFIX);
+        handleDhcp6Packets(delegatedPrefix, true /* shouldReplyRapidCommit */);
+        final ArgumentCaptor<LinkProperties> captor = ArgumentCaptor.forClass(LinkProperties.class);
+        verify(mCb, timeout(TEST_TIMEOUT_MS)).onProvisioningSuccess(captor.capture());
+        final LinkProperties lp = captor.getValue();
+        assertTrue(hasIpv6AddressPrefixedWith(lp, delegatedPrefix));
+        assertTrue(hasIpv6AddressPrefixedWith(lp, new IpPrefix(TEST_IPV6_ULA_PREFIX)));
+        assertFalse(hasIpv6AddressPrefixedWith(lp, new IpPrefix(TEST_IPV6_PREFIX)));
+    }
+
+    @Test
+    @Flag(name = IPCLIENT_DHCPV6_PD_PREFERRED_FLAG_VERSION, enabled = true)
+    public void testDhcp6PrefixDelegationPreferred_withPFlag_preferredLifetimeBecomesZero()
+            throws Exception {
+        prepareDhcp6PrefixDelegationPreferredFlagTests(TEST_PIO_FLAGS_P_SET, true /* hasUlaPio */);
+
+        final IpPrefix delegatedPrefix = new IpPrefix(TEST_DHCP6_DELEGATED_PREFIX);
+        handleDhcp6Packets(delegatedPrefix, true /* shouldReplyRapidCommit */);
+        final ArgumentCaptor<LinkProperties> captor = ArgumentCaptor.forClass(LinkProperties.class);
+        verify(mCb, timeout(TEST_TIMEOUT_MS)).onProvisioningSuccess(captor.capture());
+        final LinkProperties lp = captor.getValue();
+        assertTrue(hasIpv6AddressPrefixedWith(lp, delegatedPrefix));
+        assertFalse(hasIpv6AddressPrefixedWith(lp, new IpPrefix(TEST_IPV6_PREFIX)));
+
+        clearInvocations(mCb);
+
+        // Send another PIO with P flag but 0 preferred lifetime in the RA, this will result in the
+        // prefix being removed from the list, but the lifetimes of any prefixes already obtained
+        // via DHCPv6 are unaffected, i.e. there should be no any change on the LinkProperties.
+        final ByteBuffer pio = buildPioOption(3600 /* valid */, 0 /* preferred */,
+                TEST_PIO_FLAGS_P_SET, TEST_IPV6_PREFIX);
+        sendRouterAdvertisement(false /* waitForRs*/, (short) 1800 /* router lifetime */, pio);
+        verify(mCb, never()).onLinkPropertiesChange(any());
     }
 }

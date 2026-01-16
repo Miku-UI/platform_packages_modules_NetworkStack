@@ -1,0 +1,16 @@
+package: "com.android.networkstack.mainline.beta"
+container: "NetworkStack"
+
+flag {
+    name: "dhcpv6_address_registration"
+    namespace: "com_android_networkstack"
+    description: "Support registering self-generated IPv6 addresses using DHCPv6"
+    bug: "293393743"
+}
+
+flag {
+    name: "ipclient_populate_link_address_lifetime"
+    namespace: "com_android_networkstack"
+    description: "Populates the valid and preferred lifetimes for addresses in LinkProperties"
+    bug: "129660498"
+}

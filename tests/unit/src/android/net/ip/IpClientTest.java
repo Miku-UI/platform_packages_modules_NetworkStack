@@ -16,6 +16,7 @@
 
 package android.net.ip;
 
+import static android.Manifest.permission.READ_DEVICE_CONFIG;
 import static android.net.apf.BaseApfGenerator.APF_VERSION_6;
 import static android.net.ip.IpClientLinkObserver.CONFIG_SOCKET_RECV_BUFSIZE;
 import static android.net.ip.IpClientLinkObserver.SOCKET_RECV_BUFSIZE;
@@ -25,17 +26,21 @@ import static android.system.OsConstants.IFA_F_PERMANENT;
 import static android.system.OsConstants.IFA_F_TENTATIVE;
 import static android.system.OsConstants.RT_SCOPE_UNIVERSE;
 
+import static com.android.networkstack.util.NetworkStackUtils.IPCLIENT_DHCPV6_PD_PREFERRED_FLAG_VERSION;
+import static com.android.net.module.util.NetworkStackConstants.ICMPV6_ND_OPTION_PIO;
 import static com.android.net.module.util.NetworkStackConstants.ICMPV6_ROUTER_ADVERTISEMENT;
 import static com.android.net.module.util.netlink.NetlinkConstants.RTM_NEWLINK;
 import static com.android.net.module.util.netlink.NetlinkConstants.RTPROT_KERNEL;
 import static com.android.net.module.util.netlink.NetlinkConstants.RTM_DELROUTE;
 import static com.android.net.module.util.netlink.NetlinkConstants.RTM_NEWADDR;
 import static com.android.net.module.util.netlink.NetlinkConstants.RTM_NEWNDUSEROPT;
+import static com.android.net.module.util.netlink.NetlinkConstants.RTM_NEWPREFIX;
 import static com.android.net.module.util.netlink.NetlinkConstants.RTM_NEWROUTE;
 import static com.android.net.module.util.netlink.NetlinkConstants.RTN_UNICAST;
 import static com.android.net.module.util.netlink.StructNlMsgHdr.NLM_F_ACK;
 import static com.android.net.module.util.netlink.StructNlMsgHdr.NLM_F_REQUEST;
 import static com.android.networkstack.util.NetworkStackUtils.APF_ENABLE;
+import static com.android.testutils.TestPermissionUtil.runAsShell;
 
 import static org.junit.Assert.assertArrayEquals;
 import static org.junit.Assert.assertEquals;
@@ -45,8 +50,11 @@ import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
 import static org.junit.Assert.fail;
 import static org.mockito.ArgumentMatchers.anyBoolean;
+import static org.mockito.ArgumentMatchers.contains;
+import static org.mockito.ArgumentMatchers.longThat;
 import static org.mockito.Mockito.any;
 import static org.mockito.Mockito.anyInt;
+import static org.mockito.Mockito.anyLong;
 import static org.mockito.Mockito.anyString;
 import static org.mockito.Mockito.clearInvocations;
 import static org.mockito.Mockito.doReturn;
@@ -64,6 +72,7 @@ import static java.util.Collections.emptySet;
 
 import android.annotation.SuppressLint;
 import android.app.AlarmManager;
+import android.app.AlarmManager.OnAlarmListener;
 import android.content.ContentResolver;
 import android.content.Context;
 import android.content.pm.PackageManager;
@@ -80,6 +89,8 @@ import android.net.RouteInfo;
 import android.net.apf.ApfCapabilities;
 import android.net.apf.ApfFilter;
 import android.net.apf.ApfFilter.ApfConfiguration;
+import android.net.dhcp6.Dhcp6AddrRegTracker;
+import android.net.dhcp6.Dhcp6Client;
 import android.net.ip.IpClientLinkObserver.IpClientNetlinkMonitor;
 import android.net.ip.IpClientLinkObserver.IpClientNetlinkMonitor.INetlinkMessageProcessor;
 import android.net.ipmemorystore.NetworkAttributes;
@@ -89,24 +100,29 @@ import android.net.shared.Layer2Information;
 import android.net.shared.ProvisioningConfiguration;
 import android.net.shared.ProvisioningConfiguration.ScanResultInfo;
 import android.os.Build;
+import android.os.Handler;
+import android.os.SystemClock;
+import android.stats.connectivity.NetworkQuirkEvent;
 import android.system.OsConstants;
 
 import androidx.test.filters.SmallTest;
 import androidx.test.runner.AndroidJUnit4;
 
-import com.android.modules.utils.build.SdkLevel;
 import com.android.net.module.util.InterfaceParams;
 import com.android.net.module.util.netlink.NduseroptMessage;
 import com.android.net.module.util.netlink.RtNetlinkAddressMessage;
 import com.android.net.module.util.netlink.RtNetlinkLinkMessage;
+import com.android.net.module.util.netlink.RtNetlinkPrefixMessage;
 import com.android.net.module.util.netlink.RtNetlinkRouteMessage;
 import com.android.net.module.util.netlink.StructIfaddrMsg;
 import com.android.net.module.util.netlink.StructIfinfoMsg;
 import com.android.net.module.util.netlink.StructNdOptRdnss;
 import com.android.net.module.util.netlink.StructNlMsgHdr;
+import com.android.net.module.util.netlink.StructPrefixMsg;
 import com.android.net.module.util.netlink.StructRtMsg;
 import com.android.networkstack.R;
 import com.android.networkstack.ipmemorystore.IpMemoryStoreService;
+import com.android.networkstack.metrics.NetworkQuirkMetrics;
 import com.android.server.NetworkStackService;
 import com.android.testutils.DevSdkIgnoreRule;
 import com.android.testutils.DevSdkIgnoreRule.IgnoreAfter;
@@ -135,7 +151,6 @@ import java.util.List;
 import java.util.Random;
 import java.util.Set;
 
-
 /**
  * Tests for IpClient.
  */
@@ -159,6 +174,8 @@ public class IpClientTest {
     private static final String TEST_SSID = "test_ssid";
     private static final String TEST_BSSID = "00:11:22:33:44:55";
     private static final String TEST_BSSID2 = "00:1A:11:22:33:44";
+    private static final byte TEST_PIO_FLAGS_P_UNSET = (byte) 0xC0; // L=1,A=1,R=0,P=0
+    private static final byte TEST_PIO_FLAGS_P_SET = (byte) 0xD0; // L=1,A=1,R=0,P=1
 
     private static final String TEST_GLOBAL_ADDRESS = "1234:4321::548d:2db2:4fcf:ef75/64";
     private static final String[] TEST_LOCAL_ADDRESSES = {
@@ -194,6 +211,9 @@ public class IpClientTest {
     @Mock private IpClientNetlinkMonitor mNetlinkMonitor;
     @Mock private PackageManager mPackageManager;
     @Mock private ApfFilter mApfFilter;
+    @Mock private Dhcp6Client mDhcp6Client;
+    @Mock private NetworkQuirkMetrics mQuirkMetrics;
+    @Mock private Dhcp6AddrRegTracker mDhcp6AddrRegTracker;
 
     private InterfaceParams mIfParams;
     private INetlinkMessageProcessor mNetlinkMessageProcessor;
@@ -217,8 +237,13 @@ public class IpClientTest {
         when(mDependencies.getDeviceConfigPropertyInt(eq(CONFIG_SOCKET_RECV_BUFSIZE), anyInt()))
                 .thenReturn(SOCKET_RECV_BUFSIZE);
         when(mDependencies.makeIpClientNetlinkMonitor(
-                any(), any(), any(), anyInt(), anyBoolean(), any())).thenReturn(mNetlinkMonitor);
+                any(), any(), any(), anyInt(), any(), any())).thenReturn(mNetlinkMonitor);
         when(mNetlinkMonitor.start()).thenReturn(true);
+        when(mDependencies.makeDhcp6Client(any(), any(), any(), any(), any()))
+                .thenReturn(mDhcp6Client);
+        when(mDependencies.getNetworkQuirkMetrics()).thenReturn(mQuirkMetrics);
+        when(mDependencies.makeDhcp6AddrRegTracker(any(), any(), any(), any()))
+                .thenReturn(mDhcp6AddrRegTracker);
         doReturn(mPackageManager).when(mContext).getPackageManager();
         doReturn(true).when(mDependencies).isFeatureNotChickenedOut(mContext, APF_ENABLE);
 
@@ -234,14 +259,16 @@ public class IpClientTest {
 
     private IpClient makeIpClient(String ifname) throws Exception {
         setTestInterfaceParams(ifname);
-        final IpClient ipc =
-                new IpClient(mContext, ifname, mCb, mNetworkStackServiceManager, mDependencies);
+
+        final IpClient ipc = runAsShell(READ_DEVICE_CONFIG, () -> {
+            return new IpClient(mContext, ifname, mCb, mNetworkStackServiceManager, mDependencies);
+        });
         verify(mNetd, timeout(TEST_TIMEOUT_MS).times(1)).interfaceSetEnableIPv6(ifname, false);
         verify(mNetd, timeout(TEST_TIMEOUT_MS).times(1)).interfaceClearAddrs(ifname);
         final ArgumentCaptor<INetlinkMessageProcessor> processorCaptor =
                 ArgumentCaptor.forClass(INetlinkMessageProcessor.class);
         verify(mDependencies).makeIpClientNetlinkMonitor(any(), any(), any(), anyInt(),
-                anyBoolean(), processorCaptor.capture());
+                any(), processorCaptor.capture());
         mNetlinkMessageProcessor = processorCaptor.getValue();
         reset(mNetd);
         // Verify IpClient doesn't call onLinkPropertiesChange() when it starts.
@@ -331,6 +358,17 @@ public class IpClientTest {
         return RtNetlinkLinkMessage.build(nlmsghdr, ifInfoMsg, 0 /* mtu */, TEST_MAC, ifaceName);
     }
 
+    private static RtNetlinkPrefixMessage buildRtmPrefixMessage(final IpPrefix prefix, byte flags,
+            long preferred, long valid) {
+        final StructNlMsgHdr nlmsghdr = makeNetlinkMessageHeader(RTM_NEWPREFIX, (short) 0);
+        final StructPrefixMsg prefixmsg =
+                new StructPrefixMsg((short) OsConstants.AF_INET6 /* family */, TEST_IFINDEX,
+                        (short) ICMPV6_ND_OPTION_PIO /* type */,
+                        (short) prefix.getPrefixLength(),
+                        (short) flags);
+        return new RtNetlinkPrefixMessage(nlmsghdr, prefixmsg, prefix, preferred, valid);
+    }
+
     private void onInterfaceAddressUpdated(final LinkAddress la, int flags) {
         final RtNetlinkAddressMessage msg =
                 buildRtmAddressMessage(RTM_NEWADDR, la, TEST_IFINDEX, flags);
@@ -357,12 +395,19 @@ public class IpClientTest {
         mNetlinkMessageProcessor.processNetlinkMessage(msg, TEST_UNUSED_REAL_TIME /* whenMs */);
     }
 
+    private void onNewPrefix(final IpPrefix prefix, byte flags, long preferred, long valid) {
+        final RtNetlinkPrefixMessage msg = buildRtmPrefixMessage(prefix, flags, preferred, valid);
+        mNetlinkMessageProcessor.processNetlinkMessage(msg, TEST_UNUSED_REAL_TIME /* whenMs */);
+    }
+
     @Test
     public void testNullInterfaceNameMostDefinitelyThrows() throws Exception {
         setTestInterfaceParams(null);
         try {
-            final IpClient ipc = new IpClient(mContext, null, mCb, mNetworkStackServiceManager,
+            final IpClient ipc = runAsShell(READ_DEVICE_CONFIG, () -> {
+                return new IpClient(mContext, null, mCb, mNetworkStackServiceManager,
                     mDependencies);
+            });
             ipc.shutdown();
             fail();
         } catch (NullPointerException npe) {
@@ -375,8 +420,10 @@ public class IpClientTest {
         final String ifname = "lo";
         setTestInterfaceParams(ifname);
         try {
-            final IpClient ipc = new IpClient(mContext, ifname, null, mNetworkStackServiceManager,
+            final IpClient ipc = runAsShell(READ_DEVICE_CONFIG, () -> {
+                return new IpClient(mContext, ifname, null, mNetworkStackServiceManager,
                     mDependencies);
+            });
             ipc.shutdown();
             fail();
         } catch (NullPointerException npe) {
@@ -387,8 +434,10 @@ public class IpClientTest {
     @Test
     public void testInvalidInterfaceDoesNotThrow() throws Exception {
         setTestInterfaceParams(TEST_IFNAME);
-        final IpClient ipc = new IpClient(mContext, TEST_IFNAME, mCb, mNetworkStackServiceManager,
-                mDependencies);
+        final IpClient ipc = runAsShell(READ_DEVICE_CONFIG, () -> {
+            return new IpClient(mContext, TEST_IFNAME, mCb, mNetworkStackServiceManager,
+            mDependencies);
+        });
         verifyNoMoreInteractions(mIpMemoryStore);
         ipc.shutdown();
     }
@@ -396,8 +445,10 @@ public class IpClientTest {
     @Test
     public void testInterfaceNotFoundFailsImmediately() throws Exception {
         setTestInterfaceParams(null);
-        final IpClient ipc = new IpClient(mContext, TEST_IFNAME, mCb, mNetworkStackServiceManager,
-                mDependencies);
+        final IpClient ipc = runAsShell(READ_DEVICE_CONFIG, () -> {
+            return new IpClient(mContext, TEST_IFNAME, mCb, mNetworkStackServiceManager,
+            mDependencies);
+        });
         ipc.startProvisioning(new ProvisioningConfiguration());
         verify(mCb, timeout(TEST_TIMEOUT_MS).times(1)).onProvisioningFailure(any());
         verify(mIpMemoryStore, never()).storeNetworkAttributes(any(), any(), any());
@@ -930,7 +981,7 @@ public class IpClientTest {
                 any(), any(), configCaptor.capture(), any(), any(), any());
         final ApfConfiguration actual = configCaptor.getValue();
         assertNotNull(actual);
-        assertEquals(SdkLevel.isAtLeastS() ? 4 : 3, actual.apfVersionSupported);
+        assertEquals(4, actual.apfVersionSupported);
         assertEquals(4096, actual.apfRamSize);
 
         verifyShutdown(ipc);
@@ -959,11 +1010,62 @@ public class IpClientTest {
     }
 
     @Test
+    public void testApfForceDisable() throws Exception {
+        doReturn(false).when(mDependencies).isFeatureNotChickenedOut(mContext, APF_ENABLE);
+        final IpClient ipc = makeIpClient(TEST_IFNAME);
+        ProvisioningConfiguration.Builder config = new ProvisioningConfiguration.Builder()
+                .withoutIPv4()
+                .withoutIpReachabilityMonitor()
+                .withInitialConfiguration(
+                        conf(links(TEST_LOCAL_ADDRESSES), prefixes(TEST_PREFIXES), ips()))
+                .withApfCapabilities(
+                        new ApfCapabilities(3 /* version */, 2048 /* maxProgramSize */,
+                                ARPHRD_ETHER));
+        ipc.startProvisioning(config.build());
+        HandlerUtils.waitForIdle(ipc.getHandler(), TEST_TIMEOUT_MS);
+        verify(mDependencies, never()).maybeCreateApfFilter(
+                any(), any(), any(), any(), any(), any());
+        verifyShutdown(ipc);
+    }
+
+    @Test
+    @IgnoreUpTo(Build.VERSION_CODES.R)
+    public void testApfFilterUseNonHalApi() throws Exception {
+        final IpClient ipc = makeIpClient(TEST_IFNAME);
+        ProvisioningConfiguration.Builder config = new ProvisioningConfiguration.Builder()
+                .withoutIPv4()
+                .withoutIpReachabilityMonitor()
+                .withInitialConfiguration(
+                        conf(links(TEST_LOCAL_ADDRESSES), prefixes(TEST_PREFIXES), ips()))
+                .withApfCapabilities(null);
+        doReturn(new ApfCapabilities(6000 /* version */, 4096 /* maxProgramSize */,
+                ARPHRD_ETHER)).when(mDependencies).getApfCapabilities(eq(TEST_IFNAME), any());
+        ipc.startProvisioning(config.build());
+        final ArgumentCaptor<ApfConfiguration> configCaptor = ArgumentCaptor.forClass(
+                ApfConfiguration.class);
+        final ArgumentCaptor<ApfFilter.IApfController> apfController = ArgumentCaptor.forClass(
+                ApfFilter.IApfController.class);
+        verify(mDependencies, timeout(TEST_TIMEOUT_MS)).maybeCreateApfFilter(
+                any(), any(), configCaptor.capture(), any(), apfController.capture(), any());
+
+        final ApfConfiguration apfConfig = configCaptor.getValue();
+        assertEquals(6000, apfConfig.apfVersionSupported);
+
+        final ApfFilter.IApfController controller = apfController.getValue();
+        final byte[] program = new byte[] { 0x00, 0x01, 0x02, 0x03 };
+        controller.installPacketFilter(program, "testConfig");
+        verify(mDependencies).installPacketFilter(eq(TEST_IFNAME), eq(program), any());
+        controller.readPacketFilterRam("test");
+        verify(mDependencies).readPacketFilterRam(eq(TEST_IFNAME), any(), any());
+        verifyShutdown(ipc);
+    }
+
+    @Test
     public void testDumpApfFilter_withNoException() throws Exception {
         final IpClient ipc = makeIpClient(TEST_IFNAME);
         final ApfConfiguration config = verifyApfFilterCreatedOnStart(ipc,
                 true /* isApfSupported */);
-        assertEquals(SdkLevel.isAtLeastS() ? 4 : 3, config.apfVersionSupported);
+        assertEquals(4, config.apfVersionSupported);
         assertEquals(4096, config.apfRamSize);
         clearInvocations(mDependencies);
         ipc.dump(mFd, mWriter, null /* args */);
@@ -975,7 +1077,7 @@ public class IpClientTest {
         final IpClient ipc = makeIpClient(TEST_IFNAME);
         final ApfConfiguration config = verifyApfFilterCreatedOnStart(ipc,
                 true /* isApfSupported */);
-        assertEquals(SdkLevel.isAtLeastS() ? 4 : 3, config.apfVersionSupported);
+        assertEquals(4, config.apfVersionSupported);
         assertEquals(4096, config.apfRamSize);
         clearInvocations(mDependencies);
 
@@ -993,11 +1095,28 @@ public class IpClientTest {
         final IpClient ipc = makeIpClient(TEST_IFNAME);
         final ApfConfiguration config = verifyApfFilterCreatedOnStart(ipc,
                 true /* isApfSupported */);
-        assertEquals(SdkLevel.isAtLeastS() ? 4 : 3, config.apfVersionSupported);
+        assertEquals(4, config.apfVersionSupported);
         assertEquals(4096, config.apfRamSize);
         clearInvocations(mDependencies);
 
         ipc.updateApfCapabilities(null /* apfCapabilities */);
+        HandlerUtils.waitForIdle(ipc.getHandler(), TEST_TIMEOUT_MS);
+        verify(mDependencies, never()).maybeCreateApfFilter(any(), any(), any(), any(), any(),
+                any());
+        verifyShutdown(ipc);
+    }
+
+    @Test
+    public void testApfUpdateCapabilities_newApfCapabilitiesWithVersionZero() throws Exception {
+        final IpClient ipc = makeIpClient(TEST_IFNAME);
+        final ApfConfiguration config = verifyApfFilterCreatedOnStart(ipc,
+                true /* isApfSupported */);
+        assertEquals(4, config.apfVersionSupported);
+        assertEquals(4096, config.apfRamSize);
+        clearInvocations(mDependencies);
+
+        ipc.updateApfCapabilities(
+                new ApfCapabilities(0 /* version */, 0 /* maxProgramSize */, ARPHRD_ETHER));
         HandlerUtils.waitForIdle(ipc.getHandler(), TEST_TIMEOUT_MS);
         verify(mDependencies, never()).maybeCreateApfFilter(any(), any(), any(), any(), any(),
                 any());
@@ -1022,7 +1141,7 @@ public class IpClientTest {
         verify(mDependencies, timeout(TEST_TIMEOUT_MS)).maybeCreateApfFilter(
                 any(), any(), configCaptor.capture(), any(), any(), any());
         ApfConfiguration apfConfig = configCaptor.getValue();
-        assertEquals(SdkLevel.isAtLeastS() ? 4 : 3, apfConfig.apfVersionSupported);
+        assertEquals(4, apfConfig.apfVersionSupported);
         assertEquals(4096, apfConfig.apfRamSize);
 
         clearInvocations(mDependencies);
@@ -1038,7 +1157,7 @@ public class IpClientTest {
         verify(mDependencies, timeout(TEST_TIMEOUT_MS)).maybeCreateApfFilter(
                 any(), any(), configCaptor.capture(), any(), any(), any());
         apfConfig = configCaptor.getValue();
-        assertEquals(SdkLevel.isAtLeastS() ? 4 : 3, apfConfig.apfVersionSupported);
+        assertEquals(4, apfConfig.apfVersionSupported);
         assertEquals(2048, apfConfig.apfRamSize);
     }
 
@@ -1155,111 +1274,315 @@ public class IpClientTest {
     }
 
     @Test
-    public void testGetInitialBssidOnSOrAbove() throws Exception {
+    public void testGetInitialBssid() throws Exception {
         final IpClient ipc = makeIpClient(TEST_IFNAME);
         final Layer2Information layer2Info = new Layer2Information(TEST_L2KEY, TEST_CLUSTER,
                 MacAddress.fromString(TEST_BSSID));
         final ScanResultInfo scanResultInfo = makeScanResultInfo(TEST_SSID, TEST_BSSID2);
-        final MacAddress bssid = ipc.getInitialBssid(layer2Info, scanResultInfo,
-                true /* isAtLeastS */);
+        final MacAddress bssid = ipc.getInitialBssid(layer2Info, scanResultInfo);
         assertEquals(bssid, MacAddress.fromString(TEST_BSSID));
         ipc.shutdown();
     }
 
     @Test
-    public void testGetInitialBssidOnSOrAbove_NullScanReqsultInfo() throws Exception {
+    public void testGetInitialBssid_NullScanReqsultInfo() throws Exception {
         final IpClient ipc = makeIpClient(TEST_IFNAME);
         final Layer2Information layer2Info = new Layer2Information(TEST_L2KEY, TEST_CLUSTER,
                 MacAddress.fromString(TEST_BSSID));
-        final MacAddress bssid = ipc.getInitialBssid(layer2Info, null /* ScanResultInfo */,
-                true /* isAtLeastS */);
+        final MacAddress bssid = ipc.getInitialBssid(layer2Info, null /* ScanResultInfo */);
         assertEquals(bssid, MacAddress.fromString(TEST_BSSID));
         ipc.shutdown();
     }
 
     @Test
-    public void testGetInitialBssidOnSOrAbove_NullBssid() throws Exception {
+    public void testGetInitialBssid_NullBssid() throws Exception {
         final IpClient ipc = makeIpClient(TEST_IFNAME);
         final Layer2Information layer2Info = new Layer2Information(TEST_L2KEY, TEST_CLUSTER,
                 null /* bssid */);
         final ScanResultInfo scanResultInfo = makeScanResultInfo(TEST_SSID, TEST_BSSID);
-        final MacAddress bssid = ipc.getInitialBssid(layer2Info, scanResultInfo,
-                true /* isAtLeastS */);
+        final MacAddress bssid = ipc.getInitialBssid(layer2Info, scanResultInfo);
         assertNull(bssid);
         ipc.shutdown();
     }
 
     @Test
-    public void testGetInitialBssidOnSOrAbove_NullLayer2Info() throws Exception {
+    public void testGetInitialBssid_NullLayer2Info() throws Exception {
         final IpClient ipc = makeIpClient(TEST_IFNAME);
         final ScanResultInfo scanResultInfo = makeScanResultInfo(TEST_SSID, TEST_BSSID);
-        final MacAddress bssid = ipc.getInitialBssid(null /* layer2Info */, scanResultInfo,
-                true /* isAtLeastS */);
+        final MacAddress bssid = ipc.getInitialBssid(null /* layer2Info */, scanResultInfo);
         assertNull(bssid);
         ipc.shutdown();
     }
 
+    private OnAlarmListener verifyPrefixLifetimeAlarmSet(long afterSeconds, Handler handler) {
+        final long when = SystemClock.elapsedRealtime() + afterSeconds * 1000;
+        final long min = when - 1 * 1000;
+        final long max = when + 1 * 1000;
+        ArgumentCaptor<OnAlarmListener> captor = ArgumentCaptor.forClass(OnAlarmListener.class);
+        verify(mAlarm).setExact(
+                eq(AlarmManager.ELAPSED_REALTIME_WAKEUP),
+                longThat(x -> x >= min && x <= max),
+                contains("DHCPV6PDPREFERRED"),
+                captor.capture(),
+                eq(handler));
+        return captor.getValue();
+    }
+
+    private void verifyPrefixLifetimeAlarmNeverSet(Handler handler) {
+        verify(mAlarm, never()).setExact(
+                eq(AlarmManager.ELAPSED_REALTIME_WAKEUP),
+                anyLong(),
+                contains("DHCPV6PDPREFERRED"),
+                any(),
+                eq(handler));
+    }
+
+    private IpClient prepareDhcp6PdPreferredFlagTest() throws Exception {
+        doReturn(true).when(mDependencies)
+                .isFeatureEnabled(any(), eq(IPCLIENT_DHCPV6_PD_PREFERRED_FLAG_VERSION));
+        return doProvisioningWithDefaultConfiguration();
+    }
+
     @Test
-    public void testGetInitialBssidBeforeS() throws Exception {
-        final IpClient ipc = makeIpClient(TEST_IFNAME);
-        final Layer2Information layer2Info = new Layer2Information(TEST_L2KEY, TEST_CLUSTER,
-                MacAddress.fromString(TEST_BSSID2));
-        final ScanResultInfo scanResultInfo = makeScanResultInfo(TEST_SSID, TEST_BSSID);
-        final MacAddress bssid = ipc.getInitialBssid(layer2Info, scanResultInfo,
-                false /* isAtLeastS */);
-        assertEquals(bssid, MacAddress.fromString(TEST_BSSID));
+    public void testDhcp6PdPreferredFlag_prefixWithPFlagButZeroPreferredLft() throws Exception {
+        final IpClient ipc = prepareDhcp6PdPreferredFlagTest();
+        final Handler handler = ipc.getHandler();
+
+        final IpPrefix prefix = new IpPrefix("2001:db8:1:2::/64");
+        onNewPrefix(prefix, TEST_PIO_FLAGS_P_SET, 0 /* preferred */, 1500 /* valid */);
+        HandlerUtils.waitForIdle(ipc.getHandler(), TEST_TIMEOUT_MS);
+        verify(mDependencies, never()).makeDhcp6Client(any(), any(), any(), any(), any());
+        verifyPrefixLifetimeAlarmNeverSet(handler);
+
         ipc.shutdown();
     }
 
     @Test
-    public void testGetInitialBssidBeforeS_NullLayer2Info() throws Exception {
-        final IpClient ipc = makeIpClient(TEST_IFNAME);
-        final ScanResultInfo scanResultInfo = makeScanResultInfo(TEST_SSID, TEST_BSSID);
-        final MacAddress bssid = ipc.getInitialBssid(null /* layer2Info */, scanResultInfo,
-                false /* isAtLeastS */);
-        assertEquals(bssid, MacAddress.fromString(TEST_BSSID));
+    public void testDhcp6PdPreferredFlag_quirkMetricLogged() throws Exception {
+        final IpClient ipc = prepareDhcp6PdPreferredFlagTest();
+
+        final IpPrefix prefix = new IpPrefix("2001:db8:1:2::/64");
+        onNewPrefix(prefix, TEST_PIO_FLAGS_P_SET, 1000 /* preferred */, 1500 /* valid */);
+        HandlerUtils.waitForIdle(ipc.getHandler(), TEST_TIMEOUT_MS);
+        verify(mQuirkMetrics).setEvent(NetworkQuirkEvent.QE_DHCP6_PFLAG_TRIGGERED);
+        verify(mQuirkMetrics).statsWrite();
+
         ipc.shutdown();
     }
 
     @Test
-    public void testGetInitialBssidBeforeS_BrokenInitialBssid() throws Exception {
-        final IpClient ipc = makeIpClient(TEST_IFNAME);
-        final ScanResultInfo scanResultInfo = makeScanResultInfo(TEST_SSID, "00:11:22:33:44:");
-        final MacAddress bssid = ipc.getInitialBssid(null /* layer2Info */, scanResultInfo,
-                false /* isAtLeastS */);
-        assertNull(bssid);
+    public void testDhcp6PdPreferredFlag_prefixWithPFlagAndUpdatePreferredLftLater()
+            throws Exception {
+        final IpClient ipc = prepareDhcp6PdPreferredFlagTest();
+        final Handler handler = ipc.getHandler();
+
+        final IpPrefix prefix = new IpPrefix("2001:db8:1:2::/64");
+        onNewPrefix(prefix, TEST_PIO_FLAGS_P_SET, 1000 /* preferred */, 1500 /* valid */);
+        HandlerUtils.waitForIdle(ipc.getHandler(), TEST_TIMEOUT_MS);
+        verify(mDependencies).makeDhcp6Client(any(), any(), any(), any(), any());
+        verifyPrefixLifetimeAlarmSet(1000, handler);
+
+        clearInvocations(mDependencies);
+
+        // Trigger PIO update with the same preifx with a new non-zero preferred lifetime.
+        onNewPrefix(prefix, TEST_PIO_FLAGS_P_SET, 2000 /* preferred */, 2500 /* valid */);
+        HandlerUtils.waitForIdle(ipc.getHandler(), TEST_TIMEOUT_MS);
+        verify(mDependencies, never()).makeDhcp6Client(any(), any(), any(), any(), any());
+        verifyPrefixLifetimeAlarmSet(2000, handler);
+
         ipc.shutdown();
     }
 
     @Test
-    public void testGetInitialBssidBeforeS_BrokenInitialBssidFallback() throws Exception {
-        final IpClient ipc = makeIpClient(TEST_IFNAME);
-        final Layer2Information layer2Info = new Layer2Information(TEST_L2KEY, TEST_CLUSTER,
-                MacAddress.fromString(TEST_BSSID));
-        final ScanResultInfo scanResultInfo = makeScanResultInfo(TEST_SSID, "00:11:22:33:44:");
-        final MacAddress bssid = ipc.getInitialBssid(layer2Info, scanResultInfo,
-                false /* isAtLeastS */);
-        assertEquals(bssid, MacAddress.fromString(TEST_BSSID));
+    public void testDhcp6PdPreferredFlag_prefixWithPFlagAndPreferredLftDecreaseToZero()
+            throws Exception {
+        final IpClient ipc = prepareDhcp6PdPreferredFlagTest();
+        final Handler handler = ipc.getHandler();
+
+        final IpPrefix prefix = new IpPrefix("2001:db8:1:2::/64");
+        onNewPrefix(prefix, TEST_PIO_FLAGS_P_SET, 1000 /* preferred */, 1500 /* valid */);
+        HandlerUtils.waitForIdle(ipc.getHandler(), TEST_TIMEOUT_MS);
+        verify(mDependencies).makeDhcp6Client(any(), any(), any(), any(), any());
+        verifyPrefixLifetimeAlarmSet(1000, handler);
+
+        clearInvocations(mDependencies);
+
+        // Trigger PIO update with the same prefix but with zero preferred lifetime, this
+        // should remove the prefix from the list and stop Dhcp6Client, no crash should
+        // happen.
+        onNewPrefix(prefix, TEST_PIO_FLAGS_P_SET, 0 /* preferred */, 2500 /* valid */);
+        HandlerUtils.waitForIdle(ipc.getHandler(), TEST_TIMEOUT_MS);
+        verify(mDependencies, never()).makeDhcp6Client(any(), any(), any(), any(), any());
+
         ipc.shutdown();
     }
 
     @Test
-    public void testGetInitialBssidBeforeS_NullScanResultInfoFallback() throws Exception {
-        final IpClient ipc = makeIpClient(TEST_IFNAME);
-        final Layer2Information layer2Info = new Layer2Information(TEST_L2KEY, TEST_CLUSTER,
-                MacAddress.fromString(TEST_BSSID));
-        final MacAddress bssid = ipc.getInitialBssid(layer2Info, null /* scanResultInfo */,
-                false /* isAtLeastS */);
-        assertEquals(bssid, MacAddress.fromString(TEST_BSSID));
+    public void testDhcp6PdPreferredFlag_prefixWithPFlagAndPFlagDisappearsLater()
+            throws Exception {
+        final IpClient ipc = prepareDhcp6PdPreferredFlagTest();
+        final Handler handler = ipc.getHandler();
+
+        final IpPrefix prefix = new IpPrefix("2001:db8:1:2::/64");
+        onNewPrefix(prefix, TEST_PIO_FLAGS_P_SET, 1000 /* preferred */, 1500 /* valid */);
+        HandlerUtils.waitForIdle(ipc.getHandler(), TEST_TIMEOUT_MS);
+        verify(mDependencies).makeDhcp6Client(any(), any(), any(), any(), any());
+        verifyPrefixLifetimeAlarmSet(1000, handler);
+
+        clearInvocations(mDependencies);
+
+        // Trigger PIO update with the same prefix but P bit disappears later, this
+        // should remove the prefix from the list and stop Dhcp6Client, no crash should
+        // happen.
+        onNewPrefix(prefix, TEST_PIO_FLAGS_P_UNSET, 2000 /* preferred */, 2500 /* valid */);
+        HandlerUtils.waitForIdle(ipc.getHandler(), TEST_TIMEOUT_MS);
+        verify(mDependencies, never()).makeDhcp6Client(any(), any(), any(), any(), any());
+
         ipc.shutdown();
     }
 
     @Test
-    public void testGetInitialBssidBeforeS_NullScanResultInfoAndLayer2Info() throws Exception {
-        final IpClient ipc = makeIpClient(TEST_IFNAME);
-        final MacAddress bssid = ipc.getInitialBssid(null /* layer2Info */,
-                null /* scanResultInfo */, false /* isAtLeastS */);
-        assertNull(bssid);
+    public void testDhcp6PdPreferredFlag_multiplePrefixesWithPFlag() throws Exception {
+        final IpClient ipc = prepareDhcp6PdPreferredFlagTest();
+        final Handler handler = ipc.getHandler();
+
+        final IpPrefix prefix1 = new IpPrefix("2001:db8:1:2::/64");
+        onNewPrefix(prefix1, TEST_PIO_FLAGS_P_SET, 1000 /* preferred */, 1500 /* valid */);
+        HandlerUtils.waitForIdle(ipc.getHandler(), TEST_TIMEOUT_MS);
+        verify(mDependencies).makeDhcp6Client(any(), any(), any(), any(), any());
+        verifyPrefixLifetimeAlarmSet(1000, handler);
+
+        clearInvocations(mDependencies);
+
+        // Add a second prefix with P flag but shorter preferred lifetime, verify the alarm
+        // updates with the shorter lifetime(500).
+        final IpPrefix prefix2 = new IpPrefix("2002:db8:1:2::/64");
+        onNewPrefix(prefix2, TEST_PIO_FLAGS_P_SET, 500 /* preferred */, 750 /* valid */);
+        HandlerUtils.waitForIdle(ipc.getHandler(), TEST_TIMEOUT_MS);
+        verify(mDependencies, never()).makeDhcp6Client(any(), any(), any(), any(), any());
+        verifyPrefixLifetimeAlarmSet(500, handler);
+
+        clearInvocations(mAlarm);
+
+        // Update prefix2 preferred lifetime to a larger value (1500), verify the alarm changes
+        // back to previous minimum value (1000).
+        onNewPrefix(prefix2, TEST_PIO_FLAGS_P_SET, 1500 /* preferred */, 2000 /* valid */);
+        HandlerUtils.waitForIdle(ipc.getHandler(), TEST_TIMEOUT_MS);
+        verifyPrefixLifetimeAlarmSet(1000, handler);
+
+        clearInvocations(mAlarm);
+
+        // Add a third prefix without P flag, verify the alarm does not change.
+        final IpPrefix prefix3 = new IpPrefix("2003:db8:1:2::/64");
+        onNewPrefix(prefix3, TEST_PIO_FLAGS_P_UNSET, 2000 /* preferred */, 3000 /* valid */);
+        HandlerUtils.waitForIdle(ipc.getHandler(), TEST_TIMEOUT_MS);
+        verifyPrefixLifetimeAlarmSet(1000, handler);
+
+        clearInvocations(mAlarm);
+
+        // Update prefix1 preferred lifetime to 0, then prefix1 should be removed from the prefix
+        // list, verify the alarm changes back to prefix2 preferred lifetime given that's the only
+        // prefix left in the list, and Dhcp6Client doesn't stop neither.
+        onNewPrefix(prefix1, TEST_PIO_FLAGS_P_SET, 0 /* preferred */, 2000 /* valid */);
+        HandlerUtils.waitForIdle(ipc.getHandler(), TEST_TIMEOUT_MS);
+        verifyPrefixLifetimeAlarmSet(1500, handler);
+
+        clearInvocations(mAlarm);
+
+        // Update prefix2 without P flag, verify the alarm should be cancelled and Dhcp6Client
+        // should stop as well.
+        onNewPrefix(prefix2, TEST_PIO_FLAGS_P_UNSET, 1500 /* preferred */, 2000 /* valid */);
+        HandlerUtils.waitForIdle(ipc.getHandler(), TEST_TIMEOUT_MS);
+        verifyPrefixLifetimeAlarmNeverSet(handler);
+
+        ipc.shutdown();
+    }
+
+    @Test
+    public void testDhcp6PdPreferredFlag_prefixExpiresAndRestartClient() throws Exception {
+        final IpClient ipc = prepareDhcp6PdPreferredFlagTest();
+        final Handler handler = ipc.getHandler();
+
+        final IpPrefix prefix1 = new IpPrefix("2001:db8:1:2::/64");
+        onNewPrefix(prefix1, TEST_PIO_FLAGS_P_SET, 5 /* preferred */, 10 /* valid */);
+        HandlerUtils.waitForIdle(ipc.getHandler(), TEST_TIMEOUT_MS);
+        verify(mDependencies).makeDhcp6Client(any(), any(), any(), any(), any());
+        final OnAlarmListener alarm = verifyPrefixLifetimeAlarmSet(5, handler);
+
+        clearInvocations(mDependencies);
+        clearInvocations(mAlarm);
+
+        // Wait until the prefix1 expires.
+        Thread.sleep(5000);
+
+        // Trigger prefix expiration. The prefix is removed from the list and the alarm
+        // is not rescheduled.
+        handler.post(() -> alarm.onAlarm());
+        HandlerUtils.waitForIdle(ipc.getHandler(), TEST_TIMEOUT_MS);
+        // Simulate the RunningState handles the Dhcp6Client.CMD_ON_QUIT.
+        ipc.sendMessage(Dhcp6Client.CMD_ON_QUIT);
+        verifyPrefixLifetimeAlarmNeverSet(handler);
+
+        clearInvocations(mAlarm);
+
+        // Add a second prefix with P flag, verify the client restarts without crash.
+        final IpPrefix prefix2 = new IpPrefix("2002:db8:1:2::/64");
+        onNewPrefix(prefix2, TEST_PIO_FLAGS_P_SET, 500 /* preferred */, 750 /* valid */);
+        HandlerUtils.waitForIdle(ipc.getHandler(), TEST_TIMEOUT_MS);
+        verify(mDependencies).makeDhcp6Client(any(), any(), any(), any(), any());
+        verifyPrefixLifetimeAlarmSet(500, handler);
+
+        ipc.shutdown();
+    }
+
+    @Test
+    public void testDhcp6PdPreferredFlag_twoPrefixesExpire() throws Exception {
+        final IpClient ipc = prepareDhcp6PdPreferredFlagTest();
+        final Handler handler = ipc.getHandler();
+
+        final IpPrefix prefix1 = new IpPrefix("2001:db8:1:2::/64");
+        onNewPrefix(prefix1, TEST_PIO_FLAGS_P_SET, 10 /* preferred */, 20 /* valid */);
+        HandlerUtils.waitForIdle(ipc.getHandler(), TEST_TIMEOUT_MS);
+        verify(mDependencies).makeDhcp6Client(any(), any(), any(), any(), any());
+        final OnAlarmListener alarm = verifyPrefixLifetimeAlarmSet(10, handler);
+
+        clearInvocations(mDependencies);
+
+        final IpPrefix prefix2 = new IpPrefix("2002:db8:1:2::/64");
+        onNewPrefix(prefix2, TEST_PIO_FLAGS_P_SET, 5 /* preferred */, 10 /* valid */);
+        HandlerUtils.waitForIdle(ipc.getHandler(), TEST_TIMEOUT_MS);
+        verify(mDependencies, never()).makeDhcp6Client(any(), any(), any(), any(), any());
+        verifyPrefixLifetimeAlarmSet(5, handler);
+
+        clearInvocations(mAlarm);
+
+        // Wait until prefix1 expires.
+        Thread.sleep(5000);
+
+        // Trigger prefix2 expiration, and the alarm changes back to prefix1 lifetime.
+        handler.post(() -> alarm.onAlarm());
+        HandlerUtils.waitForIdle(ipc.getHandler(), TEST_TIMEOUT_MS);
+        verifyPrefixLifetimeAlarmSet(5, handler);
+
+        ipc.shutdown();
+    }
+
+    @Test
+    public void testDhcp6PdPreferredFlag_raceBetweenStartAndStopDhcp6Client() throws Exception {
+        final IpClient ipc = prepareDhcp6PdPreferredFlagTest();
+        final Handler handler = ipc.getHandler();
+
+        // Add/remove the prefix to/from the prefix list with P flag multiple times, and verify
+        // that no crash happens.
+        final IpPrefix prefix = new IpPrefix("2001:db8:1:2::/64");
+        onNewPrefix(prefix, TEST_PIO_FLAGS_P_SET, 100 /* preferred */, 200 /* valid */);
+        onNewPrefix(prefix, TEST_PIO_FLAGS_P_UNSET, 100 /* preferred */, 200 /* valid */);
+        onNewPrefix(prefix, TEST_PIO_FLAGS_P_SET, 100 /* preferred */, 200 /* valid */);
+        onNewPrefix(prefix, TEST_PIO_FLAGS_P_UNSET, 100 /* preferred */, 200 /* valid */);
+
+        HandlerUtils.waitForIdle(ipc.getHandler(), TEST_TIMEOUT_MS);
+        verify(mDependencies, times(1)).makeDhcp6Client(any(), any(), any(), any(), any());
+
         ipc.shutdown();
     }
 

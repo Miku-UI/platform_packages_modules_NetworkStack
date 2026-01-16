@@ -24,6 +24,7 @@ import android.stats.connectivity.DhcpFeature;
 import android.stats.connectivity.DisconnectCode;
 import android.stats.connectivity.HostnameTransResult;
 import android.stats.connectivity.Ipv6ProvisioningMode;
+import android.stats.connectivity.TransportType;
 
 import com.android.net.module.util.ConnectivityUtils;
 
@@ -65,9 +66,10 @@ public class IpProvisioningMetrics {
 
     /**
      * Write the TransportType into mStatsBuilder.
-     * TODO: implement this
      */
-    public void setTransportType() {}
+    public void setTransportType(TransportType transportType) {
+        mStatsBuilder.setTransportType(transportType);
+    }
 
     /**
      * Write the IPv4Provisioned latency into mStatsBuilder.
@@ -159,6 +161,20 @@ public class IpProvisioningMetrics {
     }
 
     /**
+     * Increase the event count of ignoring the organic NUD failure by 1.
+     */
+    public void incrementIgnoredNudFailureCount() {
+        mStatsBuilder.setIgnoreNudFailureCount(mStatsBuilder.getIgnoreNudFailureCount() + 1);
+    }
+
+    /**
+     * Increase the event count of querying the NUD failure from database by 1.
+     */
+    public void incrementQueriedNudFailureCount() {
+        mStatsBuilder.setQueryNudFailureCount(mStatsBuilder.getQueryNudFailureCount() + 1);
+    }
+
+    /**
      * Write the NetworkIpProvisioningReported proto into statsd.
      */
     public NetworkIpProvisioningReported statsWrite() {
@@ -179,7 +195,9 @@ public class IpProvisioningMetrics {
                 stats.getDisconnectCode().getNumber(),
                 DhcpSession,
                 stats.getRandomNumber(),
-                stats.getIpv6ProvisioningMode().getNumber());
+                stats.getIpv6ProvisioningMode().getNumber(),
+                stats.getIgnoreNudFailureCount(),
+                stats.getQueryNudFailureCount());
         mWatch.reset();
         return stats;
     }

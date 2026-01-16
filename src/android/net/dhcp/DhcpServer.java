@@ -479,6 +479,7 @@ public class DhcpServer extends StateMachine {
                     return HANDLED;
 
                 case CMD_STOP_DHCP_SERVER:
+                    mLog.i("Stopping DHCP server!");
                     mStoppedState.mOnStopCallback = (INetworkStackStatusCallback) msg.obj;
                     transitionTo(mStoppedState);
                     return HANDLED;
@@ -496,6 +497,11 @@ public class DhcpServer extends StateMachine {
     }
 
     class RunningState extends State {
+        @Override
+        public void enter() {
+            mLog.i("Starting DHCP server.");
+        }
+
         @Override
         public boolean processMessage(Message msg) {
             switch (msg.what) {

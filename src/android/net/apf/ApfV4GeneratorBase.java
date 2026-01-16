@@ -16,14 +16,18 @@
 
 package android.net.apf;
 
+import static android.net.apf.ApfConstants.ICMP6_TYPE_OFFSET;
 import static android.net.apf.ApfConstants.IPV4_FRAGMENT_MORE_FRAGS_MASK;
 import static android.net.apf.ApfConstants.IPV4_FRAGMENT_OFFSET_MASK;
 import static android.net.apf.ApfConstants.IPV4_FRAGMENT_OFFSET_OFFSET;
 import static android.net.apf.ApfCounterTracker.Counter.PASSED_IPV6_ICMP;
+import static android.net.apf.ApfCounterTracker.Counter.PASSED_RA;
 import static android.net.apf.BaseApfGenerator.Rbit.Rbit0;
 import static android.net.apf.BaseApfGenerator.Register.R0;
 import static android.net.apf.BaseApfGenerator.Register.R1;
 
+
+import static com.android.net.module.util.NetworkStackConstants.ICMPV6_ROUTER_ADVERTISEMENT;
 
 import android.annotation.NonNull;
 
@@ -665,11 +669,28 @@ public abstract class ApfV4GeneratorBase<Type extends ApfV4GeneratorBase<Type>> 
     }
 
     /**
-     * Add an instruction to the end of the program to move the value into
-     * {@code register} from the other register.
+     * Add an instruction to the end of the program to move the value into {@code register} from the
+     * other register. (See also the more explicitly named versions {@addMoveR1IntoR0} and
+     * {@addMoveR0IntoR1}.)
      */
     public final Type addMove(Register r) {
         return append(new Instruction(ExtendedOpcodes.MOVE, r));
+    }
+
+    /**
+     * Add an instruction to the end of the program to move the value from register R1 into register
+     * R0. (This is a more explicitly named version of {@addMove}.)
+     */
+    public final Type addMoveR1IntoR0() {
+        return addMove(R0);
+    }
+
+    /**
+     * Add an instruction to the end of the program to move the value from register R0 into register
+     * R1. (This is a more explicitly named version of {@addMove}.)
+     */
+    public final Type addMoveR0IntoR1() {
+        return addMove(R1);
     }
 
     /**
@@ -744,7 +765,10 @@ public abstract class ApfV4GeneratorBase<Type extends ApfV4GeneratorBase<Type>> 
     /**
      * Appends default packet handling and counting to the APF program.
      * This method adds logic to:
-     * 1. Increment the {@code PASSED_IPV6_ICMP} counter and pass the packet.
+     * 1. Increment the {@code PASSED_RA} counter and pass the packet if it is a Router
+     *    Advertisement packet.
+     * 2. Increment the {@code PASSED_IPV6_ICMP} counter and pass the packet if it is other
+     *    ICMPv6 packet.
      * 3. Add trampoline logic for counter processing.
      *
      *
@@ -752,6 +776,8 @@ public abstract class ApfV4GeneratorBase<Type extends ApfV4GeneratorBase<Type>> 
      * @throws IllegalInstructionException If an error occurs while adding instructions.
      */
     public final Type addDefaultPacketHandling() throws IllegalInstructionException {
+        addLoad8intoR0(ICMP6_TYPE_OFFSET);
+        addCountAndPassIfR0Equals(ICMPV6_ROUTER_ADVERTISEMENT, PASSED_RA);
         addCountAndPass(PASSED_IPV6_ICMP);
         return addCountTrampoline();
     }

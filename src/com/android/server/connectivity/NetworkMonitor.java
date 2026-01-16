@@ -96,9 +96,11 @@ import static com.android.networkstack.util.NetworkStackUtils.DNS_PROBE_PRIVATE_
 
 import android.app.PendingIntent;
 import android.content.BroadcastReceiver;
+import android.content.ComponentName;
 import android.content.Context;
 import android.content.Intent;
 import android.content.IntentFilter;
+import android.content.pm.PackageInfo;
 import android.content.pm.PackageManager;
 import android.content.res.Configuration;
 import android.content.res.Resources;
@@ -176,6 +178,7 @@ import com.android.networkstack.apishim.common.CaptivePortalDataShim;
 import com.android.networkstack.apishim.common.NetworkAgentConfigShim;
 import com.android.networkstack.apishim.common.NetworkInformationShim;
 import com.android.networkstack.apishim.common.ShimUtils;
+import com.android.networkstack.apishim.common.UnsupportedApiLevelException;
 import com.android.networkstack.metrics.DataStallDetectionStats;
 import com.android.networkstack.metrics.DataStallStatsUtils;
 import com.android.networkstack.metrics.NetworkValidationMetrics;
@@ -220,12 +223,13 @@ import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Function;
+import java.util.function.Predicate;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import java.util.regex.PatternSyntaxException;
 
 /**
- * {@hide}
+ * @hide
  */
 public class NetworkMonitor extends StateMachine {
     private static final String TAG = NetworkMonitor.class.getSimpleName();
@@ -589,6 +593,7 @@ public class NetworkMonitor extends StateMachine {
     private final boolean mMetricsEnabled;
     private final boolean mReevaluateWhenResumeEnabled;
     private final boolean mAsyncPrivdnsResolutionEnabled;
+    private final boolean mUseCapportDataInFallBackEnabled;
 
     @NonNull
     private final NetworkInformationShim mInfoShim = NetworkInformationShimImpl.newInstance();
@@ -611,6 +616,38 @@ public class NetworkMonitor extends StateMachine {
             version = 0;
         }
         return version;
+    }
+
+    private Predicate<String> getOptInToCustomTabs(final Context context) {
+        return (minimumVersionString) -> {
+            if (null == minimumVersionString) return false;
+            if ("true".equals(minimumVersionString)) return true;
+            final long minimumVersion;
+            try {
+                minimumVersion = Long.parseLong(minimumVersionString);
+            } catch (final NumberFormatException e) {
+                Log.e(TAG, "Capport min version for custom tab opt-in neither \"true\" "
+                        + "nor a number : \"" + minimumVersionString + "\"");
+                return false;
+            }
+            final Intent signInIntent =
+                    new Intent(ConnectivityManager.ACTION_CAPTIVE_PORTAL_SIGN_IN);
+            final PackageManager packageManager = context.getPackageManager();
+            final ComponentName handler = signInIntent.resolveActivity(packageManager);
+            final PackageInfo captivePortalInfo;
+            try {
+                captivePortalInfo = packageManager.getPackageInfo(handler.getPackageName(),
+                        PackageManager.GET_ACTIVITIES);
+                if (null == captivePortalInfo) {
+                    Log.e(TAG, "No error but captive portal package info is null ?");
+                    return false;
+                }
+            } catch (final PackageManager.NameNotFoundException noHandler) {
+                Log.e(TAG, "No handler activity for captive portal sign in ?");
+                return false;
+            }
+            return captivePortalInfo.getLongVersionCode() >= minimumVersion;
+        };
     }
 
     public NetworkMonitor(Context context, INetworkMonitorCallbacks cb, Network network,
@@ -676,6 +713,8 @@ public class NetworkMonitor extends StateMachine {
                 context, NetworkStackUtils.REEVALUATE_WHEN_RESUME);
         mAsyncPrivdnsResolutionEnabled = deps.isFeatureEnabled(context,
                 NetworkStackUtils.NETWORKMONITOR_ASYNC_PRIVDNS_RESOLUTION);
+        mUseCapportDataInFallBackEnabled = deps.isFeatureNotChickenedOut(context,
+                NetworkStackUtils.NETWORKMONITOR_USE_CAPPORT_DATA_IN_FALLBACK);
         mDdrEnabled = mAsyncPrivdnsResolutionEnabled
                 && deps.isFeatureEnabled(context, NetworkStackUtils.DNS_DDR_VERSION)
                 && deps.isFeatureSupported(mContext, FEATURE_DDR_IN_CONNECTIVITY)
@@ -3351,15 +3390,20 @@ public class NetworkMonitor extends StateMachine {
 
             try {
                 final JSONObject info = new JSONObject(apiContent);
-                final CaptivePortalDataShim capportData = CaptivePortalDataShimImpl.fromJson(info);
-                if (capportData != null && capportData.isCaptive()
-                        && capportData.getUserPortalUrl() == null) {
+                final CaptivePortalDataShim capportData = CaptivePortalDataShimImpl.fromJson(info,
+                        getOptInToCustomTabs(mContext));
+                if (capportData.isCaptive() && capportData.getUserPortalUrl() == null) {
                     validationLog("Missing user-portal-url from capport response");
                     return null;
                 }
                 return capportData;
             } catch (JSONException e) {
                 validationLog("Could not parse capport API JSON: " + e.getMessage());
+                return null;
+            } catch (UnsupportedApiLevelException e) {
+                // This should never happen because LinkProperties would not have a capport URL
+                // before R.
+                validationLog("Platform API too low to support capport API");
                 return null;
             }
         }
@@ -3489,7 +3533,7 @@ public class NetworkMonitor extends StateMachine {
     @Nullable
     private CaptivePortalProbeResult evaluateCapportResult(
             List<CaptivePortalProbeResult> probes, int numHttps, boolean hasCapport) {
-        CaptivePortalProbeResult capportResult = null;
+        CapportApiProbeResult capportResult = null;
         CaptivePortalProbeResult httpPortalResult = null;
         int httpSuccesses = 0;
         int httpsSuccesses = 0;
@@ -3497,7 +3541,7 @@ public class NetworkMonitor extends StateMachine {
 
         for (CaptivePortalProbeResult probe : probes) {
             if (probe instanceof CapportApiProbeResult) {
-                capportResult = probe;
+                capportResult = (CapportApiProbeResult) probe;
             } else if (probe.isConcludedFromHttps()) {
                 if (probe.isSuccessful()) httpsSuccesses++;
                 else httpsFailures++;
@@ -3525,7 +3569,14 @@ public class NetworkMonitor extends StateMachine {
         // Capport API saying it's a portal is authoritative.
         if (capportResult != null && capportResult.isPortal()) return capportResult;
         // Any HTTP probes saying probe portal is conclusive.
-        if (httpPortalResult != null) return httpPortalResult;
+        if (httpPortalResult != null) {
+            if (mUseCapportDataInFallBackEnabled && capportResult != null) {
+                final CaptivePortalDataShim capportData = capportResult.getCaptivePortalData();
+                return new CapportApiProbeResult(httpPortalResult, capportData);
+            } else {
+                return httpPortalResult;
+            }
+        }
         // Any HTTPS probes works then the network validates.
         if (httpsSuccesses > 0) {
             return CaptivePortalProbeResult.success(1 << ValidationProbeEvent.PROBE_HTTPS);
@@ -3571,6 +3622,9 @@ public class NetworkMonitor extends StateMachine {
             httpsProbe.start();
             httpProbe.start();
             latch.await(PROBE_TIMEOUT_MS, TimeUnit.MILLISECONDS);
+            if (capportApiUrl != null && mUseCapportDataInFallBackEnabled) {
+                httpProbe.join();
+            }
         } catch (InterruptedException e) {
             validationLog("Error: probes wait interrupted!");
             return CaptivePortalProbeResult.failed(CaptivePortalProbeResult.PROBE_UNKNOWN);
@@ -3606,10 +3660,19 @@ public class NetworkMonitor extends StateMachine {
         CaptivePortalProbeResult fallbackProbeResult = null;
         if (fallback != null) {
             fallbackProbeResult = sendHttpProbe(fallback, PROBE_FALLBACK, probeSpec);
-            reportHttpProbeResult(NETWORK_VALIDATION_PROBE_FALLBACK, fallbackProbeResult);
             if (fallbackProbeResult.isPortal()) {
+                if (mUseCapportDataInFallBackEnabled
+                        && httpResult instanceof CapportApiProbeResult) {
+                    final CaptivePortalDataShim capportData =
+                            ((CapportApiProbeResult) httpResult).getCaptivePortalData();
+                    maybeReportCaptivePortalData(capportData);
+                    fallbackProbeResult = new CapportApiProbeResult(fallbackProbeResult,
+                            capportData);
+                }
+                reportHttpProbeResult(NETWORK_VALIDATION_PROBE_FALLBACK, fallbackProbeResult);
                 return fallbackProbeResult;
             }
+            reportHttpProbeResult(NETWORK_VALIDATION_PROBE_FALLBACK, fallbackProbeResult);
         }
         // Otherwise wait until http and https probes completes and use their results.
         try {

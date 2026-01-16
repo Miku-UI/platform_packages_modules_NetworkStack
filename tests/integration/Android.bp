@@ -28,6 +28,7 @@ java_defaults {
         "libstaticjvmtiagent",
         // For NetworkStackUtils included in NetworkStackBase
         "libnetworkstackutilsjni",
+        "libcom_android_networkstack_com_android_net_module_util_jni_CommonConnectivityJni",
     ],
     jni_uses_sdk_apis: true,
     visibility: ["//visibility:private"],
@@ -46,8 +47,10 @@ java_defaults {
     static_libs: [
         "androidx.annotation_annotation",
         "androidx.test.rules",
+        "flag-junit",
         "mockito-target-extended-minus-junit4",
         "net-tests-utils",
+        "net-utils-networkstack",
         "testables",
     ],
     libs: [
@@ -65,7 +68,10 @@ android_library {
         "signature/**/*.java",
         "signature/**/*.kt",
     ],
-    min_sdk_version: "30",
+    min_sdk_version: select(release_flag("RELEASE_DEPRECATE_MAINLINE_R_SUPPORT"), {
+        true: "31",
+        default: "30",
+    }),
     static_libs: [
         "NetworkStackApiStableLib",
     ],
@@ -84,6 +90,9 @@ android_test {
     test_suites: ["device-tests"],
     jarjar_rules: ":NetworkStackJarJarRules",
     host_required: ["net-tests-utils-host-common"],
+    host_common_data: [
+        ":net-tests-utils-host-common",
+    ],
     test_config_template: "AndroidTestTemplate_Integration.xml",
 }
 
@@ -107,6 +116,9 @@ android_test {
     test_suites: ["device-tests"],
     jarjar_rules: ":NetworkStackJarJarRules",
     host_required: ["net-tests-utils-host-common"],
+    host_common_data: [
+        ":net-tests-utils-host-common",
+    ],
     test_config_template: "AndroidTestTemplate_Integration.xml",
 }
 
@@ -133,6 +145,9 @@ android_test {
     manifest: "AndroidManifest_root.xml",
     jarjar_rules: ":NetworkStackJarJarRules",
     host_required: ["net-tests-utils-host-common"],
+    host_common_data: [
+        ":net-tests-utils-host-common",
+    ],
     test_config_template: "AndroidTestTemplate_Integration.xml",
 }
 

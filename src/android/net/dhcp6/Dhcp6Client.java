@@ -16,28 +16,16 @@
 
 package android.net.dhcp6;
 
-import static android.net.dhcp6.Dhcp6Packet.IAID;
-import static android.net.dhcp6.Dhcp6Packet.PrefixDelegation;
 import static android.provider.DeviceConfig.NAMESPACE_CONNECTIVITY;
-import static android.system.OsConstants.AF_INET6;
-import static android.system.OsConstants.IPPROTO_UDP;
-import static android.system.OsConstants.SOCK_DGRAM;
-import static android.system.OsConstants.SOCK_NONBLOCK;
 
-import static com.android.net.module.util.NetworkStackConstants.ALL_DHCP_RELAY_AGENTS_AND_SERVERS;
-import static com.android.net.module.util.NetworkStackConstants.DHCP6_CLIENT_PORT;
-import static com.android.net.module.util.NetworkStackConstants.DHCP6_SERVER_PORT;
-import static com.android.net.module.util.NetworkStackConstants.IPV6_ADDR_ANY;
+import static com.android.net.module.util.dhcp6.Dhcp6Packet.IAID;
+import static com.android.net.module.util.dhcp6.Dhcp6Packet.PrefixDelegation;
 import static com.android.net.module.util.NetworkStackConstants.RFC7421_PREFIX_LENGTH;
 
 import android.content.Context;
 import android.net.ip.IpClient;
-import android.net.util.SocketUtils;
-import android.os.Handler;
 import android.os.Message;
 import android.os.SystemClock;
-import android.system.ErrnoException;
-import android.system.Os;
 import android.util.Log;
 
 import androidx.annotation.NonNull;
@@ -49,12 +37,11 @@ import com.android.internal.util.StateMachine;
 import com.android.internal.util.WakeupMessage;
 import com.android.net.module.util.DeviceConfigUtils;
 import com.android.net.module.util.InterfaceParams;
-import com.android.net.module.util.PacketReader;
+import com.android.net.module.util.dhcp6.Dhcp6AdvertisePacket;
+import com.android.net.module.util.dhcp6.Dhcp6Packet;
+import com.android.net.module.util.dhcp6.Dhcp6ReplyPacket;
 import com.android.net.module.util.structs.IaPrefixOption;
 
-import java.io.FileDescriptor;
-import java.io.IOException;
-import java.net.SocketException;
 import java.nio.ByteBuffer;
 import java.util.Collections;
 import java.util.List;
@@ -82,6 +69,9 @@ public class Dhcp6Client extends StateMachine {
     // Notification from DHCPv6 state machine post DHCPv6 discovery/renewal. Indicates
     // success/failure
     public static final int CMD_DHCP6_RESULT = PUBLIC_BASE + 3;
+    // Commands from controller to force doing a DHCPv6 PD Rebind.
+    public static final int CMD_REBIND_DHCP6 = PUBLIC_BASE + 4;
+
     // Message.arg1 arguments to CMD_DHCP6_RESULT notification
     public static final int DHCP6_PD_SUCCESS = 1;
     public static final int DHCP6_PD_PREFIX_EXPIRED = 2;
@@ -125,7 +115,8 @@ public class Dhcp6Client extends StateMachine {
     @NonNull private final WakeupMessage mRebindAlarm;
     @NonNull private final WakeupMessage mExpiryAlarm;
     @NonNull private final InterfaceParams mIface;
-    @NonNull private final Dhcp6PacketHandler mDhcp6PacketHandler;
+    @NonNull private final Dhcp6PacketDispatcher mDhcp6PacketDispatcher;
+    @NonNull private final Dhcp6PacketDispatcher.MessageHandler mDhcp6MessageHandler;
     @NonNull private final byte[] mClientDuid;
 
     // States.
@@ -158,7 +149,8 @@ public class Dhcp6Client extends StateMachine {
     }
 
     private Dhcp6Client(@NonNull final Context context, @NonNull final StateMachine controller,
-            @NonNull final InterfaceParams iface, @NonNull final Dependencies deps) {
+            @NonNull final InterfaceParams iface, @NonNull final Dhcp6PacketDispatcher dispatcher,
+            @NonNull final Dependencies deps) {
         super(TAG, controller.getHandler());
 
         mDependencies = deps;
@@ -166,7 +158,11 @@ public class Dhcp6Client extends StateMachine {
         mController = controller;
         mIface = iface;
         mClientDuid = Dhcp6Packet.createClientDuid(iface.macAddr);
-        mDhcp6PacketHandler = new Dhcp6PacketHandler(getHandler());
+        mDhcp6PacketDispatcher = dispatcher;
+        // It is safe to process stale DHCPv6 messages because they contain a transaction ID.
+        // This ensures that even in the unlikely event of receiving an out-of-order message,
+        // it can be handled correctly.
+        mDhcp6MessageHandler = (packet, dst) -> sendMessage(CMD_RECEIVED_PACKET, packet);
 
         addState(mStoppedState);
         addState(mStartedState); {
@@ -196,8 +192,9 @@ public class Dhcp6Client extends StateMachine {
      */
     public static Dhcp6Client makeDhcp6Client(@NonNull final Context context,
             @NonNull final StateMachine controller, @NonNull final InterfaceParams ifParams,
+            @NonNull final Dhcp6PacketDispatcher dispatcher,
             @NonNull final Dependencies deps) {
-        final Dhcp6Client client = new Dhcp6Client(context, controller, ifParams, deps);
+        final Dhcp6Client client = new Dhcp6Client(context, controller, ifParams, dispatcher, deps);
         client.start();
         return client;
     }
@@ -278,9 +275,9 @@ public class Dhcp6Client extends StateMachine {
             // prefix, e.g. the list of prefix is empty). However, if prefix(es) do exist and all
             // prefixes are invalid, then we should just ignore this packet.
             if (!packet.isValid(mTransId, mClientDuid)) return;
-            if (!packet.mPrefixDelegation.ipos.isEmpty()) {
+            if (!packet.getPrefixDelegation().ipos.isEmpty()) {
                 boolean allInvalidPrefixes = true;
-                for (IaPrefixOption ipo : packet.mPrefixDelegation.ipos) {
+                for (IaPrefixOption ipo : packet.getPrefixDelegation().ipos) {
                     if (ipo != null && ipo.isValid()) {
                         allInvalidPrefixes = false;
                         break;
@@ -471,17 +468,17 @@ public class Dhcp6Client extends StateMachine {
         @Override
         public void enter() {
             clearDhcp6State();
-            if (mDhcp6PacketHandler.start()) return;
-            Log.e(TAG, "Fail to start DHCPv6 Packet Handler");
-            // We cannot call transitionTo because a transition is still in progress.
-            // Instead, ensure that we process CMD_STOP_DHCP6 as soon as the transition is complete.
-            deferMessage(obtainMessage(CMD_STOP_DHCP6));
+            mDhcp6PacketDispatcher.registerHandler(
+                    mDhcp6MessageHandler,
+                    // register the expected DHCPv6 message types
+                    Dhcp6Packet.DHCP6_MESSAGE_TYPE_ADVERTISE,
+                    Dhcp6Packet.DHCP6_MESSAGE_TYPE_REPLY
+            );
         }
 
         @Override
         public void exit() {
-            mDhcp6PacketHandler.stop();
-            if (DBG) Log.d(TAG, "DHCPv6 Packet Handler stopped");
+            mDhcp6PacketDispatcher.unregisterHandler(mDhcp6MessageHandler);
             clearDhcp6State();
         }
 
@@ -547,7 +544,7 @@ public class Dhcp6Client extends StateMachine {
 
         @Override
         protected void receivePacket(Dhcp6Packet packet) {
-            final PrefixDelegation pd = packet.mPrefixDelegation;
+            final PrefixDelegation pd = packet.getPrefixDelegation();
             // Ignore any Advertise or Reply for Solicit(with Rapid Commit) with NoPrefixAvail
             // status code, retransmit Solicit to see if any valid response from other Servers.
             if (pd.statusCode == Dhcp6Packet.STATUS_NO_PREFIX_AVAIL) {
@@ -557,7 +554,7 @@ public class Dhcp6Client extends StateMachine {
             if (packet instanceof Dhcp6AdvertisePacket) {
                 Log.d(TAG, "Get prefix delegation option from Advertise: " + pd);
                 mAdvertise = pd;
-                mServerDuid = packet.mServerDuid;
+                mServerDuid = packet.getServerDuid();
                 mSolMaxRtMs = packet.getSolMaxRtMs().orElse(mSolMaxRtMs);
                 transitionTo(mRequestState);
             } else if (packet instanceof Dhcp6ReplyPacket) {
@@ -568,7 +565,7 @@ public class Dhcp6Client extends StateMachine {
                 }
                 Log.d(TAG, "Get prefix delegation option from RapidCommit Reply: " + pd);
                 mReply = pd;
-                mServerDuid = packet.mServerDuid;
+                mServerDuid = packet.getServerDuid();
                 mSolMaxRtMs = packet.getSolMaxRtMs().orElse(mSolMaxRtMs);
                 transitionTo(mBoundState);
             }
@@ -593,7 +590,7 @@ public class Dhcp6Client extends StateMachine {
         @Override
         protected void receivePacket(Dhcp6Packet packet) {
             if (!(packet instanceof Dhcp6ReplyPacket)) return;
-            final PrefixDelegation pd = packet.mPrefixDelegation;
+            final PrefixDelegation pd = packet.getPrefixDelegation();
             if (pd.statusCode == Dhcp6Packet.STATUS_NO_PREFIX_AVAIL) {
                 Log.w(TAG, "Server responded to Request without available prefix, restart Solicit");
                 transitionTo(mSolicitState);
@@ -658,12 +655,14 @@ public class Dhcp6Client extends StateMachine {
                 case CMD_DHCP6_PD_RENEW:
                     transitionTo(mRenewState);
                     return HANDLED;
+                case CMD_REBIND_DHCP6:
+                    transitionTo(mRebindState);
+                    return HANDLED;
                 default:
                     return NOT_HANDLED;
             }
         }
     }
-
 
     /**
      *  Per RFC8415 section 18.2.10.1: Reply for renew or Rebind.
@@ -698,7 +697,7 @@ public class Dhcp6Client extends StateMachine {
         @Override
         protected void receivePacket(Dhcp6Packet packet) {
             if (!(packet instanceof Dhcp6ReplyPacket)) return;
-            final PrefixDelegation pd = packet.mPrefixDelegation;
+            final PrefixDelegation pd = packet.getPrefixDelegation();
             // Stay at Renew/Rebind state if the Reply message takes NoPrefixAvail status code,
             // retransmit Renew/Rebind message to server, to retry obtaining the prefixes.
             if (pd.statusCode == Dhcp6Packet.STATUS_NO_PREFIX_AVAIL) {
@@ -710,7 +709,7 @@ public class Dhcp6Client extends StateMachine {
             Log.d(TAG, "Get prefix delegation option from Reply as response to Renew/Rebind " + pd);
             if (pd.ipos.isEmpty()) return;
             mReply = pd;
-            mServerDuid = packet.mServerDuid;
+            mServerDuid = packet.getServerDuid();
             // Once the delegated prefix gets refreshed successfully we have to extend the
             // preferred lifetime and valid lifetime of global IPv6 addresses, otherwise
             // these addresses will become depreacated finally and then provisioning failure
@@ -767,6 +766,13 @@ public class Dhcp6Client extends StateMachine {
         }
 
         @Override
+        public void enter() {
+            super.enter();
+            mRenewAlarm.cancel();
+            mRebindAlarm.cancel();
+        }
+
+        @Override
         protected boolean sendPacket(int transId, long elapsedTimeMs) {
             final List<IaPrefixOption> toBeRebound = mReply.getRenewableIaPrefixes();
             if (toBeRebound.isEmpty()) {
@@ -777,60 +783,13 @@ public class Dhcp6Client extends StateMachine {
         }
     }
 
-    private class Dhcp6PacketHandler extends PacketReader {
-        private FileDescriptor mUdpSock;
-
-        Dhcp6PacketHandler(Handler handler) {
-            super(handler);
-        }
-
-        @Override
-        protected void handlePacket(byte[] recvbuf, int length) {
-            try {
-                final Dhcp6Packet packet = Dhcp6Packet.decode(recvbuf, length);
-                if (DBG) Log.d(TAG, "Received packet: " + packet);
-                sendMessage(CMD_RECEIVED_PACKET, packet);
-            } catch (Dhcp6Packet.ParseException e) {
-                Log.e(TAG, "Can't parse DHCPv6 packet: " + e.getMessage());
-            }
-        }
-
-        @Override
-        protected FileDescriptor createFd() {
-            try {
-                mUdpSock = Os.socket(AF_INET6, SOCK_DGRAM | SOCK_NONBLOCK, IPPROTO_UDP);
-                SocketUtils.bindSocketToInterface(mUdpSock, mIface.name);
-                Os.bind(mUdpSock, IPV6_ADDR_ANY, DHCP6_CLIENT_PORT);
-            } catch (SocketException | ErrnoException e) {
-                Log.e(TAG, "Error creating udp socket", e);
-                closeFd(mUdpSock);
-                mUdpSock = null;
-                return null;
-            }
-            return mUdpSock;
-        }
-
-        public int transmitPacket(final ByteBuffer buf) throws ErrnoException, SocketException {
-            int ret = Os.sendto(mUdpSock, buf.array(), 0 /* byteOffset */,
-                    buf.limit() /* byteCount */, 0 /* flags */, ALL_DHCP_RELAY_AGENTS_AND_SERVERS,
-                    DHCP6_SERVER_PORT);
-            return ret;
-        }
-    }
-
     @SuppressWarnings("ByteBufferBackingArray")
     private boolean transmitPacket(@NonNull final ByteBuffer buf,
             @NonNull final String description) {
-        try {
-            if (DBG) {
-                Log.d(TAG, "Multicasting " + description + " to ff02::1:2" + " packet raw data: "
-                        + HexDump.toHexString(buf.array(), 0, buf.limit()));
-            }
-            mDhcp6PacketHandler.transmitPacket(buf);
-        } catch (ErrnoException | IOException e) {
-            Log.e(TAG, "Can't send packet: ", e);
-            return false;
+        if (DBG) {
+            Log.d(TAG, "Multicasting " + description + " to ff02::1:2" + " packet raw data: "
+                    + HexDump.toHexString(buf.array(), 0, buf.limit()));
         }
-        return true;
+        return mDhcp6PacketDispatcher.transmitPacket(buf) > 0;
     }
 }

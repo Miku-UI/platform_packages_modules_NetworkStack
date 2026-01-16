@@ -375,4 +375,31 @@ public abstract class ApfV61GeneratorBase<Type extends ApfV61GeneratorBase<Type>
         mInstructions.get(0).maybeUpdateBytesImm(data, 0, data.length);
         return self();
     }
+
+    @Override
+    public int getDataCopyChunkSize() {
+        return 511;
+    }
+
+    @Override
+    public Type addDataCopy(int src, int len) {
+        if (len < 1 || len > 511) {
+            throw new IllegalArgumentException("len must be in [1, 511], current len: " + len);
+        }
+        if (len > 255) {
+            return append(new Instruction(Opcodes.PKTDATACOPY, Rbit1).addDataOffset(src)
+                    .addU8(0).addU8(len - 256));
+        } else {
+            return append(new Instruction(Opcodes.PKTDATACOPY, Rbit1).addDataOffset(src)
+                    .addU8(len));
+        }
+    }
+
+    @Override
+    public final int getDefaultPacketHandlingSizeOverEstimate() {
+        // addLoad8intoR0(ICMP6_TYPE_OFFSET); -> 2 bytes
+        // addCountAndPassIfR0Equals(ICMPV6_ROUTER_ADVERTISEMENT, PASSED_RA); -> 9 bytes
+        // addCountAndPass(PASSED_IPV6_ICMP); -> 2 bytes
+        return 13;
+    }
 }
