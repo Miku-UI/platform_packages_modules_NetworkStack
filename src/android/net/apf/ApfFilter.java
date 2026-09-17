@@ -68,12 +68,12 @@ import static android.net.apf.ApfConstants.ICMP6_RDNSS_OPTION_TYPE;
 import static android.net.apf.ApfConstants.ICMP6_ROUTE_INFO_OPTION_TYPE;
 import static android.net.apf.ApfConstants.ICMP6_SOURCE_LL_ADDRESS_OPTION_TYPE;
 import static android.net.apf.ApfConstants.ICMP6_TYPE_OFFSET;
-import static android.net.apf.ApfConstants.IGMPV2_REPORT_FROM_IPV4_OPTION_TO_IGMP_CHECKSUM;
-import static android.net.apf.ApfConstants.IGMPV3_MODE_IS_EXCLUDE;
 import static android.net.apf.ApfConstants.IGMP_CHECKSUM_WITH_ROUTER_ALERT_OFFSET;
 import static android.net.apf.ApfConstants.IGMP_MAX_RESP_TIME_OFFSET;
 import static android.net.apf.ApfConstants.IGMP_MULTICAST_ADDRESS_OFFSET;
 import static android.net.apf.ApfConstants.IGMP_TYPE_REPORTS;
+import static android.net.apf.ApfConstants.IGMPV2_REPORT_FROM_IPV4_OPTION_TO_IGMP_CHECKSUM;
+import static android.net.apf.ApfConstants.IGMPV3_MODE_IS_EXCLUDE;
 import static android.net.apf.ApfConstants.IPPROTO_HOPOPTS;
 import static android.net.apf.ApfConstants.IPV4_ALL_HOSTS_ADDRESS_IN_LONG;
 import static android.net.apf.ApfConstants.IPV4_ALL_IGMPV3_MULTICAST_ROUTERS_ADDRESS;
@@ -86,9 +86,9 @@ import static android.net.apf.ApfConstants.IPV4_FRAGMENT_OFFSET_MASK;
 import static android.net.apf.ApfConstants.IPV4_FRAGMENT_OFFSET_OFFSET;
 import static android.net.apf.ApfConstants.IPV4_IGMP_TYPE_QUERY;
 import static android.net.apf.ApfConstants.IPV4_PROTOCOL_OFFSET;
-import static android.net.apf.ApfConstants.IPV4_SRC_ADDR_OFFSET;
 import static android.net.apf.ApfConstants.IPV4_ROUTER_ALERT_OPTION;
 import static android.net.apf.ApfConstants.IPV4_ROUTER_ALERT_OPTION_LEN;
+import static android.net.apf.ApfConstants.IPV4_SRC_ADDR_OFFSET;
 import static android.net.apf.ApfConstants.IPV4_TOTAL_LENGTH_OFFSET;
 import static android.net.apf.ApfConstants.IPV4_UDP_DESTINATION_CHECKSUM_NO_OPTIONS_OFFSET;
 import static android.net.apf.ApfConstants.IPV4_UDP_DESTINATION_PORT_NO_OPTIONS_OFFSET;
@@ -118,13 +118,24 @@ import static android.net.apf.ApfConstants.IPV6_NEXT_HEADER_OFFSET;
 import static android.net.apf.ApfConstants.IPV6_PAYLOAD_LEN_OFFSET;
 import static android.net.apf.ApfConstants.IPV6_SOLICITED_NODES_PREFIX;
 import static android.net.apf.ApfConstants.IPV6_SRC_ADDR_OFFSET;
+import static android.net.apf.ApfConstants.IPV6_TCP_DESTINATION_PORT_OFFSET;
+import static android.net.apf.ApfConstants.IPV6_TCP_SOURCE_PORT_OFFSET;
 import static android.net.apf.ApfConstants.IPV6_UDP_DESTINATION_CHECKSUM_OFFSET;
 import static android.net.apf.ApfConstants.IPV6_UDP_DESTINATION_PORT_OFFSET;
+import static android.net.apf.ApfConstants.IPV6_UDP_PAYLOAD_OFFSET;
+import static android.net.apf.ApfConstants.IPV6_UDP_SOURCE_PORT_OFFSET;
 import static android.net.apf.ApfConstants.IPV6_UNSPECIFIED_ADDRESS;
+import static android.net.apf.ApfConstants.LOW_POWER_STANDBY_MAX_PORTS_PER_TYPE;
+import static android.net.apf.ApfConstants.MDNS_IPV4_ADDR;
+import static android.net.apf.ApfConstants.MDNS_IPV4_ADDR_IN_LONG;
+import static android.net.apf.ApfConstants.MDNS_IPV6_ADDR;
+import static android.net.apf.ApfConstants.MDNS_PORT;
+import static android.net.apf.ApfConstants.MDNS_PORT_IN_BYTES;
 import static android.net.apf.ApfConstants.MLD2_MODE_IS_EXCLUDE;
 import static android.net.apf.ApfConstants.TCP_HEADER_SIZE_OFFSET;
 import static android.net.apf.ApfConstants.TCP_UDP_DESTINATION_PORT_OFFSET;
 import static android.net.apf.ApfConstants.TCP_UDP_SOURCE_PORT_OFFSET;
+import static android.net.apf.ApfConstants.UDP_HEADER_LEN;
 import static android.net.apf.ApfCounterTracker.Counter.APF_PROGRAM_ID;
 import static android.net.apf.ApfCounterTracker.Counter.APF_VERSION;
 import static android.net.apf.ApfCounterTracker.Counter.DROPPED_802_3_FRAME;
@@ -134,14 +145,14 @@ import static android.net.apf.ApfCounterTracker.Counter.DROPPED_ARP_REPLY_SPA_NO
 import static android.net.apf.ApfCounterTracker.Counter.DROPPED_ARP_REQUEST_REPLIED;
 import static android.net.apf.ApfCounterTracker.Counter.DROPPED_ARP_UNKNOWN;
 import static android.net.apf.ApfCounterTracker.Counter.DROPPED_ARP_V6_ONLY;
-import static android.net.apf.ApfCounterTracker.Counter.DROPPED_ETHERTYPE_NOT_ALLOWED;
-import static android.net.apf.ApfCounterTracker.Counter.DROPPED_ETHER_OUR_SRC_MAC;
 import static android.net.apf.ApfCounterTracker.Counter.DROPPED_ETH_BROADCAST;
+import static android.net.apf.ApfCounterTracker.Counter.DROPPED_ETHER_OUR_SRC_MAC;
+import static android.net.apf.ApfCounterTracker.Counter.DROPPED_ETHERTYPE_NOT_ALLOWED;
 import static android.net.apf.ApfCounterTracker.Counter.DROPPED_GARP_REPLY;
-import static android.net.apf.ApfCounterTracker.Counter.DROPPED_IPV4_BROADCAST_ADDR;
-import static android.net.apf.ApfCounterTracker.Counter.DROPPED_IPV4_BROADCAST_NET;
 import static android.net.apf.ApfCounterTracker.Counter.DROPPED_IGMP_INVALID;
 import static android.net.apf.ApfCounterTracker.Counter.DROPPED_IGMP_REPORT;
+import static android.net.apf.ApfCounterTracker.Counter.DROPPED_IPV4_BROADCAST_ADDR;
+import static android.net.apf.ApfCounterTracker.Counter.DROPPED_IPV4_BROADCAST_NET;
 import static android.net.apf.ApfCounterTracker.Counter.DROPPED_IPV4_ICMP_INVALID;
 import static android.net.apf.ApfCounterTracker.Counter.DROPPED_IPV4_KEEPALIVE_ACK;
 import static android.net.apf.ApfCounterTracker.Counter.DROPPED_IPV4_L2_BROADCAST;
@@ -162,7 +173,9 @@ import static android.net.apf.ApfCounterTracker.Counter.DROPPED_IPV6_NS_INVALID;
 import static android.net.apf.ApfCounterTracker.Counter.DROPPED_IPV6_NS_OTHER_HOST;
 import static android.net.apf.ApfCounterTracker.Counter.DROPPED_IPV6_NS_REPLIED_NON_DAD;
 import static android.net.apf.ApfCounterTracker.Counter.DROPPED_IPV6_ROUTER_SOLICITATION;
+import static android.net.apf.ApfCounterTracker.Counter.DROPPED_LOW_POWER_STANDBY;
 import static android.net.apf.ApfCounterTracker.Counter.DROPPED_MDNS;
+import static android.net.apf.ApfCounterTracker.Counter.DROPPED_MDNS_REPLY_FILTERED;
 import static android.net.apf.ApfCounterTracker.Counter.DROPPED_NON_UNICAST_TDLS;
 import static android.net.apf.ApfCounterTracker.Counter.DROPPED_RA;
 import static android.net.apf.ApfCounterTracker.Counter.FILTER_AGE_16384THS;
@@ -172,13 +185,6 @@ import static android.net.apf.ApfCounterTracker.Counter.PASSED_ARP_REQUEST;
 import static android.net.apf.ApfCounterTracker.Counter.PASSED_ARP_UNICAST_REPLY;
 import static android.net.apf.ApfCounterTracker.Counter.PASSED_DHCP;
 import static android.net.apf.ApfCounterTracker.Counter.PASSED_DUE_TO_REPLY_OVER_MTU;
-import static android.net.apf.ApfConstants.IPv6_UDP_PAYLOAD_OFFSET;
-import static android.net.apf.ApfConstants.MDNS_IPV4_ADDR;
-import static android.net.apf.ApfConstants.MDNS_IPV4_ADDR_IN_LONG;
-import static android.net.apf.ApfConstants.MDNS_IPV6_ADDR;
-import static android.net.apf.ApfConstants.MDNS_PORT;
-import static android.net.apf.ApfConstants.UDP_HEADER_LEN;
-import static android.net.apf.ApfConstants.MDNS_PORT_IN_BYTES;
 import static android.net.apf.ApfCounterTracker.Counter.PASSED_ETHER_OUR_SRC_MAC;
 import static android.net.apf.ApfCounterTracker.Counter.PASSED_IPV4;
 import static android.net.apf.ApfCounterTracker.Counter.PASSED_IPV4_FROM_DHCPV4_SERVER;
@@ -188,12 +194,15 @@ import static android.net.apf.ApfCounterTracker.Counter.PASSED_IPV6_ICMP;
 import static android.net.apf.ApfCounterTracker.Counter.PASSED_IPV6_NON_ICMP;
 import static android.net.apf.ApfCounterTracker.Counter.PASSED_IPV6_UNICAST_NON_ICMP;
 import static android.net.apf.ApfCounterTracker.Counter.PASSED_LOW_POWER_STANDBY_MAGIC_PACKET;
+import static android.net.apf.ApfCounterTracker.Counter.PASSED_LOW_POWER_STANDBY_PORT_ALLOWED;
 import static android.net.apf.ApfCounterTracker.Counter.PASSED_MDNS;
 import static android.net.apf.ApfCounterTracker.Counter.PASSED_NON_IP_UNICAST;
 import static android.net.apf.ApfCounterTracker.Counter.TOTAL_PACKETS;
 import static android.net.apf.BaseApfGenerator.MemorySlot;
 import static android.net.apf.BaseApfGenerator.Register.R0;
 import static android.net.apf.BaseApfGenerator.Register.R1;
+import static android.net.nsd.OffloadEngine.OFFLOAD_TYPE_FILTER_REPLIES;
+import static android.net.nsd.OffloadEngine.OFFLOAD_TYPE_REPLY;
 import static android.net.util.SocketUtils.makePacketSocketAddress;
 import static android.os.PowerManager.ACTION_DEVICE_IDLE_MODE_CHANGED;
 import static android.os.PowerManager.ACTION_DEVICE_LIGHT_IDLE_MODE_CHANGED;
@@ -247,6 +256,7 @@ import static com.android.net.module.util.NetworkStackConstants.IPV6_ADDR_NODE_L
 import android.annotation.ChecksSdkIntAtLeast;
 import android.annotation.NonNull;
 import android.annotation.Nullable;
+import android.annotation.RequiresApi;
 import android.content.BroadcastReceiver;
 import android.content.Context;
 import android.content.Intent;
@@ -260,8 +270,10 @@ import android.net.apf.ApfCounterTracker.Counter;
 import android.net.apf.BaseApfGenerator.IllegalInstructionException;
 import android.net.ip.MulticastReportMonitor;
 import android.net.nsd.NsdManager;
+import android.os.Build;
 import android.os.Handler;
 import android.os.PowerManager;
+import android.os.PowerManager.LowPowerStandbyPortDescription;
 import android.os.SystemClock;
 import android.stats.connectivity.NetworkQuirkEvent;
 import android.system.ErrnoException;
@@ -280,11 +292,13 @@ import com.android.modules.utils.build.SdkLevel;
 import com.android.net.module.util.CollectionUtils;
 import com.android.net.module.util.ConnectivityUtils;
 import com.android.net.module.util.InterfaceParams;
+import com.android.net.module.util.LinkPropertiesUtils;
 import com.android.net.module.util.PacketReader;
 import com.android.net.module.util.ProcfsParsingUtils;
 import com.android.networkstack.metrics.ApfSessionInfoMetrics;
 import com.android.networkstack.metrics.IpClientRaInfoMetrics;
 import com.android.networkstack.metrics.NetworkQuirkMetrics;
+import com.android.networkstack.metrics.NetworkStackStatsLog;
 import com.android.networkstack.util.NetworkStackUtils;
 
 import java.io.FileDescriptor;
@@ -346,14 +360,15 @@ public class ApfFilter {
         public boolean handleArpOffload;
         public boolean handleNdOffload;
         public boolean handleMdnsOffload;
+        public boolean handleMdnsReplyFilter;
         public boolean handleIgmpOffload;
         public boolean handleMldOffload;
         public boolean handleIpv4PingOffload;
         public boolean handleIpv6PingOffload;
         public boolean acceptMagicPackets;
+        public boolean handleLowPowerStandbyPorts;
         public boolean skipMdnsRecordWithoutPriority;
     }
-
 
     private class RaPacketReader extends PacketReader {
         private static final int RECEIVE_BUFFER_SIZE = 1514;
@@ -417,11 +432,13 @@ public class ApfFilter {
     private final boolean mHandleArpOffload;
     private final boolean mHandleNdOffload;
     private final boolean mHandleMdnsOffload;
+    private final boolean mHandleMdnsReplyFilter;
     private final boolean mHandleIgmpOffload;
     private final boolean mHandleMldOffload;
     private final boolean mHandleIpv4PingOffload;
     private final boolean mHandleIpv6PingOffload;
     private final boolean mAcceptMagicPackets;
+    private final boolean mHandleLowPowerStandbyPorts;
     private final boolean mSkipMdnsRecordWithoutPriority;
 
     private final NetworkQuirkMetrics mNetworkQuirkMetrics;
@@ -429,12 +446,28 @@ public class ApfFilter {
     private final ApfSessionInfoMetrics mApfSessionInfoMetrics;
     private final NsdManager mNsdManager;
     private final MulticastReportMonitor mMulticastReportMonitor;
-    private final ApfMdnsOffloadEngine mApfMdnsOffloadEngine;
+    private final ApfMdnsOffloadEngine mApfMdnsReplyOffloadEngine;
+    private final ApfMdnsOffloadEngine mApfMdnsFilterOffloadEngine;
     private final List<MdnsOffloadRule> mOffloadRules = new ArrayList<>();
+    private final List<MdnsOffloadRule> mFilterRules = new ArrayList<>();
     // The number of mDNS rules requiring APF to transmit a reply and drop the query packet. A
     // value of -1 means all mDNS query packets should be passed; no mDNS query packets will trigger
     // the transmit and reply logic.
     private int mNumOfMdnsRuleToOffload = -1;
+    // Whether to ignore the mDNS reply filter. If the estimated program size of the mDNS reply
+    // filter exceeds the remaining APF RAM, this is set to true to fail-open and pass all mDNS
+    // reply packets.
+    private boolean mMdnsReplyFilterFailOpen = true;
+
+    private ApfLowPowerStandbyPortsSubscriber mLowPowerStandbyPortsSubscriber;
+    private final ArraySet<Long> mLowPowerStandbyPortsTcpLocal = new ArraySet<>();
+    private final ArraySet<Long> mLowPowerStandbyPortsTcpRemote = new ArraySet<>();
+    private final ArraySet<Long> mLowPowerStandbyPortsUdpLocal = new ArraySet<>();
+    private final ArraySet<Long> mLowPowerStandbyPortsUdpRemote = new ArraySet<>();
+    // This is the interface MTU, NOT the IPv6 MTU or per-route MTU.
+    // TODO: We should also watch the IPv6 MTU from netlink as it may be lower. Per-route MTU is
+    //  maybe less critical since APF usually handles small, link-local packets.
+    private int mInterfaceMtu;
 
     private int mOverEstimatedProgramSize = 0;
 
@@ -463,6 +496,18 @@ public class ApfFilter {
         return powerManager.isDeviceLightIdleMode();
     }
 
+    private boolean isIgnoreMdnsReplyFilter() {
+        if (!mMulticastFilter) {
+            return true;
+        }
+
+        if (mMdnsReplyFilterFailOpen) {
+            return true;
+        }
+
+        return false;
+    }
+
     // Detects doze mode state transitions.
     private final BroadcastReceiver mDeviceIdleReceiver = new BroadcastReceiver() {
         @Override
@@ -486,9 +531,6 @@ public class ApfFilter {
     private byte[] mIPv4Address;
     // The subnet prefix length of our IPv4 network. Only valid if mIPv4Address is not null.
     private int mIPv4PrefixLength;
-
-    // Tracks the value of /sys/class/net/{ifname}/mtu
-    private int mInterfaceMtu;
 
     // Our IPv6 non-tentative addresses
     private Set<Inet6Address> mIPv6NonTentativeAddresses = new ArraySet<>();
@@ -541,6 +583,18 @@ public class ApfFilter {
         }
     }
 
+    private void updateMdnsOffloadRules(ApfMdnsUtils.MdnsRules allRules) {
+        mOffloadRules.clear();
+        mOffloadRules.addAll(allRules.offloadRules);
+        installNewProgram();
+    }
+
+    private void updateMdnsFilterRules(ApfMdnsUtils.MdnsRules allRules) {
+        mFilterRules.clear();
+        mFilterRules.addAll(allRules.filterRules);
+        installNewProgram();
+    }
+
     @VisibleForTesting
     public ApfFilter(Handler handler, Context context, ApfConfiguration config,
             InterfaceParams ifParams, IApfController apfController,
@@ -561,6 +615,7 @@ public class ApfFilter {
         mMaximumApfProgramSize = Math.max(0, maximumApfProgramSize);
         mApfController = apfController;
         mInterfaceParams = ifParams;
+        mInterfaceMtu = mInterfaceParams.defaultMtu;
         mMulticastFilter = config.multicastFilter;
         mDrop802_3Frames = config.ieee802_3Filter;
         mMinRdnssLifetimeSec = config.minRdnssLifetimeSec;
@@ -568,11 +623,13 @@ public class ApfFilter {
         mHandleArpOffload = config.handleArpOffload;
         mHandleNdOffload = config.handleNdOffload;
         mHandleMdnsOffload = config.handleMdnsOffload;
+        mHandleMdnsReplyFilter = config.handleMdnsReplyFilter;
         mHandleIgmpOffload = config.handleIgmpOffload;
         mHandleMldOffload = config.handleMldOffload;
         mHandleIpv4PingOffload = config.handleIpv4PingOffload;
         mHandleIpv6PingOffload = config.handleIpv6PingOffload;
         mAcceptMagicPackets = config.acceptMagicPackets;
+        mHandleLowPowerStandbyPorts = config.handleLowPowerStandbyPorts;
         mSkipMdnsRecordWithoutPriority = config.skipMdnsRecordWithoutPriority;
         mDependencies = dependencies;
         mNetworkQuirkMetrics = networkQuirkMetrics;
@@ -616,20 +673,42 @@ public class ApfFilter {
         // Listen for doze-mode transition changes to enable/disable the IPv6 multicast filter.
         mDependencies.addDeviceIdleReceiver(mDeviceIdleReceiver);
 
+        if (enableHandleLowPowerStandbyPortsFilter()) {
+            mLowPowerStandbyPortsSubscriber =
+                    new ApfLowPowerStandbyPortsSubscriber(context, mHandler,
+                            ports -> setLowPowerStandbyPorts(ports));
+            mLowPowerStandbyPortsSubscriber.subscribe();
+        }
+
         mNsdManager = context.getSystemService(NsdManager.class);
         if (enableOffloadEngineRegistration()) {
-            mApfMdnsOffloadEngine = new ApfMdnsOffloadEngine(mInterfaceParams.name, mHandler,
-                    mNsdManager,
-                    allRules -> {
-                        mOffloadRules.clear();
-                        mOffloadRules.addAll(allRules);
-                        installNewProgram();
-                    },
-                    mSkipMdnsRecordWithoutPriority
-                    );
-            mApfMdnsOffloadEngine.registerOffloadEngine();
+            if (mHandleMdnsOffload) {
+                mApfMdnsReplyOffloadEngine = new ApfMdnsOffloadEngine(mInterfaceParams.name,
+                        mHandler,
+                        mNsdManager,
+                        this::updateMdnsOffloadRules,
+                        OFFLOAD_TYPE_REPLY,
+                        mSkipMdnsRecordWithoutPriority
+                );
+                mApfMdnsReplyOffloadEngine.registerOffloadEngine();
+            } else {
+                mApfMdnsReplyOffloadEngine = null;
+            }
+            if (mHandleMdnsReplyFilter) {
+                mApfMdnsFilterOffloadEngine = new ApfMdnsOffloadEngine(mInterfaceParams.name,
+                        mHandler,
+                        mNsdManager,
+                        this::updateMdnsFilterRules,
+                        OFFLOAD_TYPE_FILTER_REPLIES,
+                        mSkipMdnsRecordWithoutPriority
+                );
+                mApfMdnsFilterOffloadEngine.registerOffloadEngine();
+            } else {
+                mApfMdnsFilterOffloadEngine = null;
+            }
         } else {
-            mApfMdnsOffloadEngine = null;
+            mApfMdnsReplyOffloadEngine = null;
+            mApfMdnsFilterOffloadEngine = null;
         }
 
         mIPv4MulticastAddresses.addAll(
@@ -697,7 +776,7 @@ public class ApfFilter {
             return SystemClock.elapsedRealtime();
         }
 
-        /** Add receiver for detecting doze mode change */
+        /** Add receiver for detecting doze mode changed. */
         public void addDeviceIdleReceiver(@NonNull final BroadcastReceiver receiver) {
             final IntentFilter intentFilter = new IntentFilter(ACTION_DEVICE_IDLE_MODE_CHANGED);
             if (SdkLevel.isAtLeastT()) {
@@ -811,17 +890,6 @@ public class ApfFilter {
         public List<Inet6Address> getIPv6MulticastAddresses(@NonNull String ifname) {
             return ProcfsParsingUtils.getIpv6MulticastAddresses(ifname);
         }
-
-        /**
-         * Loads the existing interface MTU for the specific interface from the file
-         * /sys/class/net/{ifname}/mtu.
-         *
-         * If the file does not exist or the interface is not found,
-         * the function returns 1500 as default interface MTU.
-         */
-        public int getInterfaceMtu(@NonNull String ifname) {
-            return ProcfsParsingUtils.getInterfaceMtu(ifname);
-        }
     }
 
     public IApfController getApfController() {
@@ -883,6 +951,18 @@ public class ApfFilter {
         sb.append("doze: ");
         sb.append(mInDozeMode ? "TRUE" : "FALSE");
         sb.append(", ");
+        sb.append("low power standby filter: ");
+        sb.append(enableHandleLowPowerStandbyPortsFilter() ? "ENABLED" : "DISABLED");
+        sb.append(", ");
+        sb.append("mDNS reply filter: ");
+        sb.append("[ ");
+        if (enableMdns4Filter()) {
+            sb.append("Mdns4, ");
+        }
+        if (enableMdns6Filter()) {
+            sb.append("Mdns6, ");
+        }
+        sb.append("], ");
         sb.append("offloads: ");
         sb.append("[ ");
         if (enableArpOffload()) {
@@ -909,13 +989,22 @@ public class ApfFilter {
         if (enableMdns6Offload()) {
             sb.append("Mdns6, ");
         }
-        sb.append("] ");
+        sb.append("], ");
         sb.append("total RAs: ");
         sb.append(mRas.size());
-        sb.append(" filtered RAs: ");
+        sb.append(", ");
+        sb.append("filtered RAs: ");
         sb.append(mNumFilteredRas);
-        sb.append(" mDNSs: ");
+        sb.append(", ");
+        sb.append("mDNS query offload rules: ");
         sb.append(mOffloadRules.size());
+        sb.append(", ");
+        sb.append("mDNS reply filter rules: ");
+        sb.append(mFilterRules.size());
+        sb.append(", ");
+        sb.append("low power standby ports: ");
+        sb.append(mLowPowerStandbyPortsTcpLocal.size() + mLowPowerStandbyPortsTcpRemote.size()
+                + mLowPowerStandbyPortsUdpLocal.size() + mLowPowerStandbyPortsUdpRemote.size());
         sb.append(" }");
         return sb.toString();
     }
@@ -1257,6 +1346,11 @@ public class ApfFilter {
                     getUint8(mPacket, ICMP6_TYPE_OFFSET) != ICMPV6_ROUTER_ADVERTISEMENT) {
                 throw new InvalidRaException("Not an ICMP6 router advertisement");
             }
+
+            final int ipv6PayloadLength = getUint16(mPacket, IPV6_PAYLOAD_LEN_OFFSET);
+            final int totalPacketLength = ETH_HEADER_LEN + IPV6_HEADER_LEN + ipv6PayloadLength;
+            // If packet has trailing bytes, ignore them.
+            mPacket.limit(Math.min(totalPacketLength, mPacket.limit()));
 
             // Ignore destination MAC address.
             addIgnoreSection(6 /* Size of MAC address */);
@@ -1857,7 +1951,7 @@ public class ApfFilter {
     private int mMaxDistinctRas = 0;
 
     /**
-     * Generate filter code to accept "magic packets" which are specially formatted packets
+     * Generates filter code to accept "magic packets" which are specially formatted packets
      * expected to wake up the host (e.g. Android TV).
      *
      * If the packet is a magic packet (most common formats accepted, see below for details),
@@ -2135,6 +2229,50 @@ public class ApfFilter {
     }
 
     /**
+     * Generates filter code to handle mDNS reply packets.
+     * <p>
+     * The only way to enter the mDNS reply filter check logic is by jumping to the
+     * labelCheckMdnsReplyFilter label.
+     * On entry, the packet is known to be an IPv4/IPv6 mDNS reply packet, and register R1
+     * is set to the offset of the beginning of the UDP payload (the DNS header).
+     *
+     * @param gen the APF generator to generate the filter code
+     * @param labelCheckMdnsReplyFilter the label to jump to for checking the mDNS reply filter
+     */
+    private void generateMdnsReplyFilter(
+            final ApfV6GeneratorBase<?> gen,
+            short labelCheckMdnsReplyFilter) throws IllegalInstructionException {
+
+        gen.defineLabel(labelCheckMdnsReplyFilter);
+        // fail-open to pass all reply packets where the RAM is not enough
+        if (!mMulticastFilter || mMdnsReplyFilterFailOpen) {
+            gen.addCountAndPass(PASSED_MDNS);
+            return;
+        }
+
+        final short ruleMatch = gen.getUniqueLabel();
+        // Set R0 to the offset of the beginning of the UDP payload (the DNS header)
+        gen.addSwap();
+
+        final List<byte[]> bytesList = new ArrayList<>();
+        for (final MdnsOffloadRule rule : mFilterRules) {
+            for (final MdnsOffloadRule.Matcher matcher : rule.mMatchers) {
+                bytesList.add(matcher.mQnames);
+            }
+        }
+        try {
+            gen.addJumpIfPktAtR0ContainAnyOfDnsA(bytesList, ruleMatch);
+        } catch (IllegalArgumentException e) {
+            Log.e(TAG, "Failed to generate mDNS reply filter for " + mFilterRules, e);
+            gen.addCountAndPass(PASSED_MDNS);
+            return;
+        }
+        gen.addCountAndDrop(DROPPED_MDNS_REPLY_FILTERED)
+                .defineLabel(ruleMatch)
+                .addCountAndPass(PASSED_MDNS);
+    }
+
+    /**
      * Generates filter code to handle IPv4 mDNS packets.
      * <p>
      * On entry, this filter knows it is processing an IPv4 packet. It will then process all IPv4
@@ -2142,9 +2280,11 @@ public class ApfFilter {
      *
      * @param gen the APF generator to generate the filter code
      * @param labelCheckMdnsQueryPayload the label to jump to for checking the mDNS query payload
+     * @param labelCheckMdnsReplyFilter the label to jump to for checking the mDNS reply filter
      */
     private void generateIPv4MdnsFilter(ApfV6GeneratorBase<?> gen,
-            short labelCheckMdnsQueryPayload)
+            short labelCheckMdnsQueryPayload,
+            short labelCheckMdnsReplyFilter)
             throws IllegalInstructionException {
         final short skipMdnsFilter = gen.getUniqueLabel();
 
@@ -2193,10 +2333,24 @@ public class ApfFilter {
         gen.addLoad16intoR0(IPV4_DNS_QDCOUNT_NO_OPTIONS_OFFSET)
                 // Set the UDP payload offset in R1 before potentially jumping to the payload
                 // check logic.
-                .addLoadImmediate(R1, IPV4_UDP_PAYLOAD_NO_OPTIONS_OFFSET)
-                .addJumpIfR0NotEquals(0, labelCheckMdnsQueryPayload);
+                .addLoadImmediate(R1, IPV4_UDP_PAYLOAD_NO_OPTIONS_OFFSET);
 
-        // TODO: check the reply payload.
+        // if it is query packet (qdcount > 0):
+        //   apply query offloading logic.
+        // else if it is reply packet (qdcount = 0):
+        //   apply reply filtering logic.
+        if (enableMdns4Offload()) {
+            // Handle mDNS query offloading.
+            gen.addJumpIfR0NotEquals(0, labelCheckMdnsQueryPayload);
+        }
+
+        if (enableMdns4Filter()) {
+            // Handle mDNS reply filtering.
+            gen.addJumpIfR0Equals(0, labelCheckMdnsReplyFilter);
+        }
+
+        // If mDNS offload/filter is not enabled, packets are dropped if multicast lock is not held
+        // (mMulticastFilter is true), otherwise passed for upper layer applications.
         if (mMulticastFilter) {
             gen.addCountAndDrop(DROPPED_MDNS);
         } else {
@@ -2214,9 +2368,12 @@ public class ApfFilter {
      *
      * @param gen the APF generator to generate the filter code
      * @param labelCheckMdnsQueryPayload the label to jump to for checking the mDNS query payload
+     * @param labelCheckMdnsReplyFilter the label to jump to for checking the mDNS reply filter
      */
-    private void generateIPv4Filter(ApfV4GeneratorBase<?> gen, short labelCheckMdnsQueryPayload)
-            throws IllegalInstructionException {
+    private void generateIPv4Filter(
+            ApfV4GeneratorBase<?> gen,
+            short labelCheckMdnsQueryPayload,
+            short labelCheckMdnsReplyFilter) throws IllegalInstructionException {
         // Here's a basic summary of what the IPv4 filter program does:
         //
         // if the network is IPv6 only network:
@@ -2242,7 +2399,10 @@ public class ApfFilter {
         //       pass
         //   else:
         //     if filtering multicast (i.e. multicast lock not held):
-        //       drop
+        //       if the reply matches one of the offload rules:
+        //         pass
+        //       else
+        //         drop
         //     else
         //       pass
         //
@@ -2266,6 +2426,15 @@ public class ApfFilter {
         //       pass
         //     else it is IGMPv2:
         //       transmit IGMPv2 reports (one report per group) and drop
+        //
+        // if filtering low power standby ports:
+        //   if cpu is suspended (indicated by memory slot):
+        //     if tcp, and port matches exemptions:
+        //       pass
+        //     else if udp, and port matches exemptions:
+        //       pass
+        //     else
+        //       drop
         //
         // if filtering multicast (i.e. multicast lock not held):
         //   if it's DHCP destined to our MAC:
@@ -2307,8 +2476,12 @@ public class ApfFilter {
             return;
         }
 
-        if (enableMdns4Offload()) {
-            generateIPv4MdnsFilter((ApfV6GeneratorBase<?>) gen, labelCheckMdnsQueryPayload);
+        if (enableMdns4Filter() || enableMdns4Offload()) {
+            generateIPv4MdnsFilter(
+                    (ApfV6GeneratorBase<?>) gen,
+                    labelCheckMdnsQueryPayload,
+                    labelCheckMdnsReplyFilter
+            );
         }
 
         if (enableIgmpOffload()) {
@@ -2358,8 +2531,7 @@ public class ApfFilter {
         // If any NAT-T keepalive filter matches, drop
         generateV4NattKeepaliveFilters(gen);
 
-        // If TCP unicast on port 7, drop
-        generateV4TcpPort7Filter(gen);
+        generateV4TcpUdpPortFilter(gen);
 
         if (enableIpv4PingOffload()) {
             generateUnicastIpv4PingOffload((ApfV6GeneratorBase<?>) gen);
@@ -2608,9 +2780,11 @@ public class ApfFilter {
      *
      * @param gen the APF generator to generate the filter code
      * @param labelCheckMdnsQueryPayload the label to jump to for checking the mDNS query payload
+     * @param labelCheckMdnsReplyFilter the label to jump to for checking the mDNS reply filter
      */
     private void generateIPv6MdnsFilter(ApfV6GeneratorBase<?> gen,
-            short labelCheckMdnsQueryPayload) throws IllegalInstructionException {
+            short labelCheckMdnsQueryPayload,
+            short labelCheckMdnsReplyFilter) throws IllegalInstructionException {
         final short skipMdnsFilter = gen.getUniqueLabel();
 
         // If the packet is too short to be a valid IPv6 mDNS packet, the filter is skipped.
@@ -2654,10 +2828,24 @@ public class ApfFilter {
         gen.addLoad16intoR0(IPV6_DNS_QDCOUNT_OFFSET)
                 // Set the UDP payload offset in R1 before potentially jumping to the payload
                 // check logic.
-                .addLoadImmediate(R1, IPv6_UDP_PAYLOAD_OFFSET)
-                .addJumpIfR0NotEquals(0, labelCheckMdnsQueryPayload);
+                .addLoadImmediate(R1, IPV6_UDP_PAYLOAD_OFFSET);
 
-        // TODO: check the reply payload.
+        // if it is query packet (qdcount > 0):
+        //   apply query offloading logic.
+        // else if it is reply packet (qdcount = 0):
+        //   apply reply filtering logic.
+        if (enableMdns6Offload()) {
+            // Handle mDNS query offloading.
+            gen.addJumpIfR0NotEquals(0, labelCheckMdnsQueryPayload);
+        }
+
+        if (enableMdns6Filter()) {
+            // Handle mDNS reply filtering.
+            gen.addJumpIfR0Equals(0, labelCheckMdnsReplyFilter);
+        }
+
+        // If mDNS offload/filter is not enabled, packets are dropped if multicast lock is not held
+        // (mMulticastFilter is true), otherwise passed for upper layer applications.
         if (mMulticastFilter) {
             gen.addCountAndDrop(DROPPED_MDNS);
         } else {
@@ -2748,9 +2936,12 @@ public class ApfFilter {
      *
      * @param gen the APF generator to generate the filter code
      * @param labelCheckMdnsQueryPayload the label to jump to for checking the mDNS query payload
+     * @param labelCheckMdnsReplyFilter the label to jump to for checking the mDNS reply filter
      */
-    private void generateIPv6Filter(ApfV4GeneratorBase<?> gen, short labelCheckMdnsQueryPayload)
-            throws IllegalInstructionException {
+    private void generateIPv6Filter(
+            ApfV4GeneratorBase<?> gen,
+            short labelCheckMdnsQueryPayload,
+            short labelCheckMdnsReplyFilter) throws IllegalInstructionException {
         // Here's a basic summary of what the IPv6 filter program does:
         //
         // if there is a HOPOPTS option present (e.g. MLD query)
@@ -2790,12 +2981,24 @@ public class ApfFilter {
         //       pass
         //   else:
         //     if filtering multicast (i.e. multicast lock not held):
-        //       drop
+        //       if the reply matches one of the offload rules:
+        //         pass
+        //       else
+        //         drop
         //     else
         //       pass
         //
         // (APFv6+ specific logic) if it's unicast ICMPv6 echo request to our host:
         //    transmit echo reply and drop
+        //
+        // if filtering low power standby ports:
+        //   if cpu is suspended (indicated by memory slot):
+        //     if tcp, and port matches exemptions:
+        //       pass
+        //     else if udp, and port matches exemptions:
+        //       pass
+        //     else
+        //       drop
         //
         // if we're dropping multicast
         //   if it's not ICMPv6 or it's ICMPv6 but we're in doze mode:
@@ -2852,14 +3055,63 @@ public class ApfFilter {
             gen.addCountAndPassIfR0Equals(IPPROTO_HOPOPTS, PASSED_IPV6_HOPOPTS);
         }
 
-        if (enableMdns6Offload()) {
-            generateIPv6MdnsFilter((ApfV6GeneratorBase<?>) gen, labelCheckMdnsQueryPayload);
+        if (enableMdns6Filter() || enableMdns6Offload()) {
+            generateIPv6MdnsFilter(
+                    (ApfV6GeneratorBase<?>) gen,
+                    labelCheckMdnsQueryPayload,
+                    labelCheckMdnsReplyFilter
+            );
             gen.addLoad8intoR0(IPV6_NEXT_HEADER_OFFSET);
         }
 
         if (enableIpv6PingOffload()) {
             generateUnicastIpv6PingOffload((ApfV6GeneratorBase<?>) gen);
             gen.addLoad8intoR0(IPV6_NEXT_HEADER_OFFSET);
+        }
+
+        if (enableHandleLowPowerStandbyPortsFilter()) {
+            // TODO: The generated program code should only filter if the device is in low power
+            // standby. Currently, the interpreter does not support indicating this state to the
+            // running program; therefore, if the feature is enabled, the generated program code
+            // always filters, regardless of low power standby state. When the interpreter supports
+            // indicating this state, the generated code will have to properly check it here.
+
+            if (!mLowPowerStandbyPortsTcpLocal.isEmpty()
+                    || !mLowPowerStandbyPortsTcpRemote.isEmpty()) {
+                final short skipTcp = gen.getUniqueLabel();
+                gen.addJumpIfR0NotEquals(IPPROTO_TCP, skipTcp);
+                if (!mLowPowerStandbyPortsTcpLocal.isEmpty()) {
+                    gen.addLoad16intoR0(IPV6_TCP_DESTINATION_PORT_OFFSET);
+                    gen.addCountAndPassIfR0IsOneOf(mLowPowerStandbyPortsTcpLocal,
+                            PASSED_LOW_POWER_STANDBY_PORT_ALLOWED);
+                }
+                if (!mLowPowerStandbyPortsTcpRemote.isEmpty()) {
+                    gen.addLoad16intoR0(IPV6_TCP_SOURCE_PORT_OFFSET);
+                    gen.addCountAndPassIfR0IsOneOf(mLowPowerStandbyPortsTcpRemote,
+                            PASSED_LOW_POWER_STANDBY_PORT_ALLOWED);
+                }
+                gen.addCountAndDrop(DROPPED_LOW_POWER_STANDBY);
+                gen.defineLabel(skipTcp);
+            }
+
+            if (!mLowPowerStandbyPortsUdpLocal.isEmpty()
+                    || !mLowPowerStandbyPortsUdpRemote.isEmpty()) {
+                final short skipUdp = gen.getUniqueLabel();
+                gen.addJumpIfR0NotEquals(IPPROTO_UDP, skipUdp);
+                if (!mLowPowerStandbyPortsUdpLocal.isEmpty()) {
+                    gen.addLoad16intoR0(IPV6_UDP_DESTINATION_PORT_OFFSET);
+                    gen.addCountAndPassIfR0IsOneOf(mLowPowerStandbyPortsUdpLocal,
+                            PASSED_LOW_POWER_STANDBY_PORT_ALLOWED);
+                }
+                if (!mLowPowerStandbyPortsUdpRemote.isEmpty()) {
+                    gen.addLoad16intoR0(IPV6_UDP_SOURCE_PORT_OFFSET);
+                    gen.addCountAndPassIfR0IsOneOf(mLowPowerStandbyPortsUdpRemote,
+                            PASSED_LOW_POWER_STANDBY_PORT_ALLOWED);
+                }
+                gen.defineLabel(skipUdp);
+            }
+
+            gen.addCountAndDrop(DROPPED_LOW_POWER_STANDBY);
         }
 
         // Drop multicast if the multicast filter is enabled.
@@ -3507,33 +3759,77 @@ public class ApfFilter {
     }
 
     /**
-     * Generate filter code to drop IPv4 TCP packets on port 7.
+     * Generate filter code to drop IPv4 TCP/UDP packet by using port based rule.
      * <p>
      * On entry, we know it is IPv4 ethertype, but don't know anything else.
      * R0/R1 have nothing useful in them, and can be clobbered.
      */
-    private void generateV4TcpPort7Filter(ApfV4GeneratorBase<?> gen)
+    private void generateV4TcpUdpPortFilter(ApfV4GeneratorBase<?> gen)
             throws IllegalInstructionException {
-        final short skipPort7V4Filter = gen.getUniqueLabel();
-
-        // Check it's TCP.
-        gen.addLoad8intoR0(IPV4_PROTOCOL_OFFSET);
-        gen.addJumpIfR0NotEquals(IPPROTO_TCP, skipPort7V4Filter);
-
-        // Check it's not a fragment or is the initial fragment.
-        gen.addLoad16intoR0(IPV4_FRAGMENT_OFFSET_OFFSET);
-        gen.addJumpIfR0AnyBitsSet(IPV4_FRAGMENT_OFFSET_MASK, skipPort7V4Filter);
-
-        // Check it's destination port 7.
+        // Preload R1 with the IPv4 header size.
+        // This change relies on the fact that R1 is not clobbered by counter-incrementing
+        // instructions in APFv6.
+        // For context:
+        // - R1 is clobbered by counter instructions in APFv4.
+        // - R1 is safe from clobbering by these instructions in APFv6, allowing its preloaded
+        // value to be used reliably.
+        // - low power standby port filtering is only supported in APFv6+.
         gen.addLoadFromMemory(R1, MemorySlot.IPV4_HEADER_SIZE);
+
+        final short skipTcp = gen.getUniqueLabel();
+
+        // Check it's TCP and not a fragment (or is the initial fragment).
+        gen.addJumpIfNotUnfragmentedIPv4Protocol(IPPROTO_TCP, skipTcp);
+
+        // Drop if destination port is 7.
         gen.addLoad16R1IndexedIntoR0(TCP_UDP_DESTINATION_PORT_OFFSET);
-        gen.addJumpIfR0NotEquals(ECHO_PORT, skipPort7V4Filter);
+        gen.addCountAndDropIfR0Equals(ECHO_PORT, DROPPED_IPV4_TCP_PORT7_UNICAST);
 
-        // Drop it.
-        gen.addCountAndDrop(DROPPED_IPV4_TCP_PORT7_UNICAST);
+        // low power standby port filter is only enabled in APFv6+.
+        if (!enableHandleLowPowerStandbyPortsFilter()) {
+            gen.defineLabel(skipTcp);
+            return;
+        }
 
-        // Skip label.
-        gen.defineLabel(skipPort7V4Filter);
+        // APFv6+ guaranteed, R1 is not clobbered
+
+        // TODO: The generated program code should only filter if the device is in low power
+        // standby. Currently, the interpreter does not support indicating this state to the
+        // running program; therefore, if the feature is enabled, the generated program code
+        // always filters, regardless of low power standby state. When the interpreter supports
+        // indicating this state, the generated code will have to properly check it here.
+
+        if (!mLowPowerStandbyPortsTcpLocal.isEmpty()) {
+            gen.addCountAndPassIfR0IsOneOf(mLowPowerStandbyPortsTcpLocal,
+                    PASSED_LOW_POWER_STANDBY_PORT_ALLOWED);
+        }
+        if (!mLowPowerStandbyPortsTcpRemote.isEmpty()) {
+            gen.addLoad16R1IndexedIntoR0(TCP_UDP_SOURCE_PORT_OFFSET);
+            gen.addCountAndPassIfR0IsOneOf(mLowPowerStandbyPortsTcpRemote,
+                    PASSED_LOW_POWER_STANDBY_PORT_ALLOWED);
+        }
+        gen.addCountAndDrop(DROPPED_LOW_POWER_STANDBY);
+
+        gen.defineLabel(skipTcp);
+
+        // low power standby UDP port filter
+        if (!mLowPowerStandbyPortsUdpLocal.isEmpty()
+                || !mLowPowerStandbyPortsUdpRemote.isEmpty()) {
+            final short skipUdp = gen.getUniqueLabel();
+            gen.addJumpIfR0NotEquals(IPPROTO_UDP, skipUdp);
+            if (!mLowPowerStandbyPortsUdpLocal.isEmpty()) {
+                gen.addLoad16R1IndexedIntoR0(TCP_UDP_DESTINATION_PORT_OFFSET);
+                gen.addCountAndPassIfR0IsOneOf(mLowPowerStandbyPortsUdpLocal,
+                        PASSED_LOW_POWER_STANDBY_PORT_ALLOWED);
+            }
+            if (!mLowPowerStandbyPortsUdpRemote.isEmpty()) {
+                gen.addLoad16R1IndexedIntoR0(TCP_UDP_SOURCE_PORT_OFFSET);
+                gen.addCountAndPassIfR0IsOneOf(mLowPowerStandbyPortsUdpRemote,
+                        PASSED_LOW_POWER_STANDBY_PORT_ALLOWED);
+            }
+            gen.defineLabel(skipUdp);
+        }
+        gen.addCountAndDrop(DROPPED_LOW_POWER_STANDBY);
     }
 
     private void generateV6KeepaliveFilters(ApfV4GeneratorBase<?> gen)
@@ -3670,7 +3966,6 @@ public class ApfFilter {
                     final int udpLength = UDP_HEADER_LEN + rule.mOffloadPayload.length;
                     final int ipv4TotalLength = IPV4_HEADER_MIN_LEN + udpLength;
                     final int pktLength = ETH_HEADER_LEN + ipv4TotalLength;
-
                     if (pktLength > mInterfaceMtu) {
                         gen.addCountAndPass(PASSED_DUE_TO_REPLY_OVER_MTU);
                     } else {
@@ -3753,9 +4048,12 @@ public class ApfFilter {
      * </ul>
      * @param gen the APF generator to generate the filter code
      * @param labelCheckMdnsQueryPayload the label to jump to for checking the mDNS query payload
+     * @param labelCheckMdnsReplyFilter the label to jump to for checking the mDNS reply filter
      */
-    private void emitPrologue(@NonNull ApfV4GeneratorBase<?> gen, short labelCheckMdnsQueryPayload)
-            throws IllegalInstructionException {
+    private void emitPrologue(
+            @NonNull ApfV4GeneratorBase<?> gen,
+            short labelCheckMdnsQueryPayload,
+            short labelCheckMdnsReplyFilter) throws IllegalInstructionException {
         if (hasDataAccess(mApfVersionSupported)) {
             if (gen instanceof ApfV4Generator) {
                 // Increment TOTAL_PACKETS.
@@ -3860,7 +4158,7 @@ public class ApfFilter {
         // Add IPv4 filters:
         short skipIPv4FiltersLabel = gen.getUniqueLabel();
         gen.addJumpIfR0NotEquals(ETH_P_IP, skipIPv4FiltersLabel);
-        generateIPv4Filter(gen, labelCheckMdnsQueryPayload);
+        generateIPv4Filter(gen, labelCheckMdnsQueryPayload, labelCheckMdnsReplyFilter);
         gen.defineLabel(skipIPv4FiltersLabel);
 
         // Check for IPv6:
@@ -3877,7 +4175,7 @@ public class ApfFilter {
 
         // Add IPv6 filters:
         gen.defineLabel(ipv6FilterLabel);
-        generateIPv6Filter(gen, labelCheckMdnsQueryPayload);
+        generateIPv6Filter(gen, labelCheckMdnsQueryPayload, labelCheckMdnsReplyFilter);
     }
 
     private void installPacketFilter(byte[] program, String logInfo) {
@@ -3902,6 +4200,20 @@ public class ApfFilter {
     @VisibleForTesting
     public int getOverEstimatedProgramSize() {
         return mOverEstimatedProgramSize;
+    }
+
+    private int estimateMdnsReplyFilterSize(boolean failOpen) throws IllegalInstructionException {
+        final ApfV6GeneratorBase<?> gen = (ApfV6GeneratorBase<?>) createApfGenerator();
+        final int before = gen.programLengthOverEstimate();
+        final short label = gen.getUniqueLabel();
+        final boolean oldFailOpen = mMdnsReplyFilterFailOpen;
+        mMdnsReplyFilterFailOpen = failOpen;
+        try {
+            generateMdnsReplyFilter(gen, label);
+        } finally {
+            mMdnsReplyFilterFailOpen = oldFailOpen;
+        }
+        return gen.programLengthOverEstimate() - before;
     }
 
     private int calcMdnsOffloadProgramSizeOverEstimate(int numOfMdnsRuleToOffload)
@@ -4000,8 +4312,6 @@ public class ApfFilter {
         // Increase the counter before we generate the program.
         // This keeps the APF_PROGRAM_ID counter in sync with the program.
         mNumProgramUpdates++;
-
-        mInterfaceMtu = mDependencies.getInterfaceMtu(mInterfaceParams.name);
         try {
             // Step 1: Determine how many RA filters/mDNS offloads we can fit in the program.
             ApfV4GeneratorBase<?> gen = createApfGenerator();
@@ -4009,8 +4319,9 @@ public class ApfFilter {
                 preloadData((ApfV61GeneratorBase<?>) gen);
             }
             short labelCheckMdnsQueryPayload = gen.getUniqueLabel();
+            short labelCheckMdnsReplyFilter = gen.getUniqueLabel();
 
-            emitPrologue(gen, labelCheckMdnsQueryPayload);
+            emitPrologue(gen, labelCheckMdnsQueryPayload, labelCheckMdnsReplyFilter);
 
             int programLengthOverEstimate = gen.programLengthOverEstimate();
 
@@ -4043,13 +4354,19 @@ public class ApfFilter {
             // requirement. These devices are usually on home networks with very chatty mDNS
             // traffic.
             if (enableMdns4Offload() || enableMdns6Offload()) {
+                int reservedMdnsReplyFilterFailOpenSize = 0;
+                if (enableMdns4Filter() || enableMdns6Filter()) {
+                    reservedMdnsReplyFilterFailOpenSize =
+                        estimateMdnsReplyFilterSize(true /* failOpen */);
+                }
                 final int remainSize = mMaximumApfProgramSize - programLengthOverEstimate;
                 mNumOfMdnsRuleToOffload = mOffloadRules.size();
                 int mDnsProgramLengthOverEstimate = 0;
                 for (; mNumOfMdnsRuleToOffload >= -1; --mNumOfMdnsRuleToOffload) {
                     mDnsProgramLengthOverEstimate = calcMdnsOffloadProgramSizeOverEstimate(
                             mNumOfMdnsRuleToOffload);
-                    if (mDnsProgramLengthOverEstimate <= remainSize) {
+                    if ((mDnsProgramLengthOverEstimate + reservedMdnsReplyFilterFailOpenSize)
+                            <= remainSize) {
                         break;
                     }
                 }
@@ -4067,12 +4384,31 @@ public class ApfFilter {
                             + " (clear memory, reason: unable to fail-open for mDNS)");
                     return;
                 }
-
                 programLengthOverEstimate += mDnsProgramLengthOverEstimate;
             } else {
                 mNumOfMdnsRuleToOffload = -1;
             }
 
+            // We prioritize mDNS offload rules over mDNS reply filtering.
+            // The estimation follows a conservative "fail-open" strategy:
+            // we always reserve enough space for a minimal fail-open reply filter when calculating
+            // offload rule capacity.
+            // We first attempt to generate instructions for all reply filter rules;
+            // if the required space exceeds the remaining APF RAM, we fall back to the fail-open
+            // logic to ensure mDNS functionality is never broken, even under memory pressure.
+            if (enableMdns4Filter() || enableMdns6Filter()) {
+                final int fullFilterSize = estimateMdnsReplyFilterSize(false /* failOpen */);
+                if ((programLengthOverEstimate + fullFilterSize) <= mMaximumApfProgramSize) {
+                    mMdnsReplyFilterFailOpen = false;
+                    programLengthOverEstimate += fullFilterSize;
+                } else {
+                    mMdnsReplyFilterFailOpen = true;
+                    programLengthOverEstimate += estimateMdnsReplyFilterSize(true /* failOpen */);
+                    Log.i(TAG, "Program exceeds maximum size, skipping mDNS reply filter");
+                }
+            } else {
+                mMdnsReplyFilterFailOpen = true;
+            }
 
             for (Ra ra : mRas) {
                 // skip filter if it has expired.
@@ -4093,6 +4429,10 @@ public class ApfFilter {
             if (enableMdns4Offload() || enableMdns6Offload()) {
                 generateMdnsQueryOffload((ApfV6GeneratorBase<?>) gen, labelCheckMdnsQueryPayload,
                         mNumOfMdnsRuleToOffload);
+            }
+
+            if (enableMdns4Filter() || enableMdns6Filter()) {
+                generateMdnsReplyFilter((ApfV6GeneratorBase<?>) gen, labelCheckMdnsReplyFilter);
             }
 
             mNumFilteredRas = rasToFilter.size();
@@ -4219,6 +4559,83 @@ public class ApfFilter {
     }
 
     /**
+     * Sets the low power standby port exemptions, and installs a new APF program if the current APF
+     * program should be updated.
+     */
+    @RequiresApi(Build.VERSION_CODES.UPSIDE_DOWN_CAKE)
+    private void setLowPowerStandbyPorts(@NonNull List<LowPowerStandbyPortDescription> ports) {
+        if (mIsApfShutdown) return;
+
+        final ArraySet<Long> lowPowerStandbyPortsTcpLocal = matchLowPowerStandbyPorts(ports,
+                LowPowerStandbyPortDescription.PROTOCOL_TCP,
+                LowPowerStandbyPortDescription.MATCH_PORT_LOCAL);
+        final ArraySet<Long> lowPowerStandbyPortsTcpRemote = matchLowPowerStandbyPorts(ports,
+                LowPowerStandbyPortDescription.PROTOCOL_TCP,
+                LowPowerStandbyPortDescription.MATCH_PORT_REMOTE);
+        final ArraySet<Long> lowPowerStandbyPortsUdpLocal = matchLowPowerStandbyPorts(ports,
+                LowPowerStandbyPortDescription.PROTOCOL_UDP,
+                LowPowerStandbyPortDescription.MATCH_PORT_LOCAL);
+        final ArraySet<Long> lowPowerStandbyPortsUdpRemote = matchLowPowerStandbyPorts(ports,
+                LowPowerStandbyPortDescription.PROTOCOL_UDP,
+                LowPowerStandbyPortDescription.MATCH_PORT_REMOTE);
+
+        if (lowPowerStandbyPortsTcpLocal.size() > LOW_POWER_STANDBY_MAX_PORTS_PER_TYPE
+                || lowPowerStandbyPortsTcpRemote.size() > LOW_POWER_STANDBY_MAX_PORTS_PER_TYPE
+                || lowPowerStandbyPortsUdpLocal.size() > LOW_POWER_STANDBY_MAX_PORTS_PER_TYPE
+                || lowPowerStandbyPortsUdpRemote.size() > LOW_POWER_STANDBY_MAX_PORTS_PER_TYPE) {
+            NetworkStackStatsLog.write(
+                    NetworkStackStatsLog.CORE_NETWORKING_TERRIBLE_ERROR_OCCURRED,
+                    NetworkStackStatsLog
+                            .CORE_NETWORKING_TERRIBLE_ERROR_OCCURRED__ERROR_TYPE__TYPE_TOO_MANY_LOW_POWER_STANDBY_PORTS);
+            while (lowPowerStandbyPortsTcpLocal.size() > LOW_POWER_STANDBY_MAX_PORTS_PER_TYPE)
+                lowPowerStandbyPortsTcpLocal.removeAt(lowPowerStandbyPortsTcpLocal.size() - 1);
+            while (lowPowerStandbyPortsTcpRemote.size() > LOW_POWER_STANDBY_MAX_PORTS_PER_TYPE)
+                lowPowerStandbyPortsTcpRemote.removeAt(lowPowerStandbyPortsTcpRemote.size() - 1);
+            while (lowPowerStandbyPortsUdpLocal.size() > LOW_POWER_STANDBY_MAX_PORTS_PER_TYPE)
+                lowPowerStandbyPortsUdpLocal.removeAt(lowPowerStandbyPortsUdpLocal.size() - 1);
+            while (lowPowerStandbyPortsUdpRemote.size() > LOW_POWER_STANDBY_MAX_PORTS_PER_TYPE)
+                lowPowerStandbyPortsUdpRemote.removeAt(lowPowerStandbyPortsUdpRemote.size() - 1);
+        }
+
+        boolean portsChanged = false;
+        if (!mLowPowerStandbyPortsTcpLocal.equals(lowPowerStandbyPortsTcpLocal)) {
+            mLowPowerStandbyPortsTcpLocal.clear();
+            mLowPowerStandbyPortsTcpLocal.addAll(lowPowerStandbyPortsTcpLocal);
+            portsChanged = true;
+        }
+        if (!mLowPowerStandbyPortsTcpRemote.equals(lowPowerStandbyPortsTcpRemote)) {
+            mLowPowerStandbyPortsTcpRemote.clear();
+            mLowPowerStandbyPortsTcpRemote.addAll(lowPowerStandbyPortsTcpRemote);
+            portsChanged = true;
+        }
+        if (!mLowPowerStandbyPortsUdpLocal.equals(lowPowerStandbyPortsUdpLocal)) {
+            mLowPowerStandbyPortsUdpLocal.clear();
+            mLowPowerStandbyPortsUdpLocal.addAll(lowPowerStandbyPortsUdpLocal);
+            portsChanged = true;
+        }
+        if (!mLowPowerStandbyPortsUdpRemote.equals(lowPowerStandbyPortsUdpRemote)) {
+            mLowPowerStandbyPortsUdpRemote.clear();
+            mLowPowerStandbyPortsUdpRemote.addAll(lowPowerStandbyPortsUdpRemote);
+            portsChanged = true;
+        }
+
+        if (portsChanged)
+            installNewProgram();
+    }
+
+    @RequiresApi(Build.VERSION_CODES.UPSIDE_DOWN_CAKE)
+    private static ArraySet<Long> matchLowPowerStandbyPorts(
+            @NonNull List<LowPowerStandbyPortDescription> ports, int protocol, int matcher) {
+        final ArraySet<Long> matchingPorts = new ArraySet<>();
+        for (LowPowerStandbyPortDescription port : ports) {
+            if (port.getProtocol() == protocol && port.getPortMatcher() == matcher) {
+                matchingPorts.add(Long.valueOf(port.getPortNumber()));
+            }
+        }
+        return matchingPorts;
+    }
+
+    /**
      * Create an {@link ApfFilter} if {@code apfCapabilities} indicates support for packet
      * filtering using APF programs.
      */
@@ -4274,9 +4691,17 @@ public class ApfFilter {
         mRaPacketReader.stop();
         mRas.clear();
         mDependencies.removeBroadcastReceiver(mDeviceIdleReceiver);
+        if (SdkLevel.isAtLeastV() && mLowPowerStandbyPortsSubscriber != null) {
+            mLowPowerStandbyPortsSubscriber.unsubscribe();
+        }
         mIsApfShutdown = true;
-        if (SdkLevel.isAtLeastV() && mApfMdnsOffloadEngine != null) {
-            mApfMdnsOffloadEngine.unregisterOffloadEngine();
+        if (SdkLevel.isAtLeastV()) {
+            if (mApfMdnsReplyOffloadEngine != null) {
+                mApfMdnsReplyOffloadEngine.unregisterOffloadEngine();
+            }
+            if (mApfMdnsFilterOffloadEngine != null) {
+                mApfMdnsFilterOffloadEngine.unregisterOffloadEngine();
+            }
         }
 
         if (mMulticastReportMonitor != null) {
@@ -4345,13 +4770,19 @@ public class ApfFilter {
         final int prefix = (ipv4Address != null) ? ipv4Address.getPrefixLength() : 0;
         final Pair<Set<Inet6Address>, Set<Inet6Address>>
                 ipv6Addresses = retrieveIPv6LinkAddress(lp);
-
+        final int newMtu = lp.getMtu();
+        final boolean isValidMtu = LinkPropertiesUtils.isValidMtu(newMtu,
+                lp.hasGlobalIpv6Address());
         if ((prefix == mIPv4PrefixLength)
                 && Arrays.equals(addr, mIPv4Address)
                 && ipv6Addresses.first.equals(mIPv6TentativeAddresses)
                 && ipv6Addresses.second.equals(mIPv6NonTentativeAddresses)
+                && (!isValidMtu || newMtu == mInterfaceMtu)
         ) {
             return;
+        }
+        if (isValidMtu) {
+            mInterfaceMtu = newMtu;
         }
         mIPv4Address = addr;
         mIPv4PrefixLength = prefix;
@@ -4426,7 +4857,7 @@ public class ApfFilter {
 
     @ChecksSdkIntAtLeast(api = 35 /* Build.VERSION_CODES.VanillaIceCream */)
     private boolean enableOffloadEngineRegistration() {
-        return mHandleMdnsOffload && useApfV6Generator();
+        return (mHandleMdnsOffload || mHandleMdnsReplyFilter) && useApfV6Generator();
     }
 
     @ChecksSdkIntAtLeast(api = 35 /* Build.VERSION_CODES.VanillaIceCream */)
@@ -4436,14 +4867,34 @@ public class ApfFilter {
 
     @ChecksSdkIntAtLeast(api = 35 /* Build.VERSION_CODES.VanillaIceCream */)
     private boolean enableMdns4Offload() {
-        return enableOffloadEngineRegistration() && mIPv4Address != null
+        return enableOffloadEngineRegistration()
+                && mHandleMdnsOffload
+                && mIPv4Address != null
                 && !mOffloadRules.isEmpty();
     }
 
     @ChecksSdkIntAtLeast(api = 35 /* Build.VERSION_CODES.VanillaIceCream */)
     private boolean enableMdns6Offload() {
-        return enableOffloadEngineRegistration() && mIPv6LinkLocalAddress != null
+        return enableOffloadEngineRegistration()
+                && mHandleMdnsOffload
+                && mIPv6LinkLocalAddress != null
                 && !mOffloadRules.isEmpty();
+    }
+
+    @ChecksSdkIntAtLeast(api = 35 /* Build.VERSION_CODES.VanillaIceCream */)
+    private boolean enableMdns4Filter() {
+        return enableOffloadEngineRegistration()
+                && mHandleMdnsReplyFilter
+                && mIPv4Address != null
+                && !mFilterRules.isEmpty();
+    }
+
+    @ChecksSdkIntAtLeast(api = 35 /* Build.VERSION_CODES.VanillaIceCream */)
+    private boolean enableMdns6Filter() {
+        return enableOffloadEngineRegistration()
+                && mHandleMdnsReplyFilter
+                && mIPv6LinkLocalAddress != null
+                && !mFilterRules.isEmpty();
     }
 
     @ChecksSdkIntAtLeast(api = 35 /* Build.VERSION_CODES.VanillaIceCream */)
@@ -4484,6 +4935,11 @@ public class ApfFilter {
     }
 
     @ChecksSdkIntAtLeast(api = 35 /* Build.VERSION_CODES.VanillaIceCream */)
+    public boolean enableHandleLowPowerStandbyPortsFilter() {
+        return SdkLevel.isAtLeastV() && mHandleLowPowerStandbyPorts && useApfV6Generator();
+    }
+
+    @ChecksSdkIntAtLeast(api = 35 /* Build.VERSION_CODES.VanillaIceCream */)
     private boolean useApfV6Generator() {
         return SdkLevel.isAtLeastV() && ApfV6Generator.supportsVersion(mApfVersionSupported);
     }
@@ -4504,7 +4960,8 @@ public class ApfFilter {
             final TcpKeepalivePacketDataParcelable sentKeepalivePacket) {
         log("Adding keepalive ack(" + slot + ")");
         if (null != mKeepalivePackets.get(slot)) {
-            throw new IllegalArgumentException("Keepalive slot " + slot + " is occupied");
+            log("Keepalive slot " + slot + " is occupied");
+            return;
         }
         final int ipVersion = sentKeepalivePacket.srcAddress.length == 4 ? 4 : 6;
         mKeepalivePackets.put(slot, (ipVersion == 4)
@@ -4524,7 +4981,8 @@ public class ApfFilter {
             final NattKeepalivePacketDataParcelable sentKeepalivePacket) {
         log("Adding NAT-T keepalive packet(" + slot + ")");
         if (null != mKeepalivePackets.get(slot)) {
-            throw new IllegalArgumentException("NAT-T Keepalive slot " + slot + " is occupied");
+            log("NAT-T Keepalive slot " + slot + " is occupied");
+            return;
         }
 
         // TODO : update ApfFilter to support dropping v6 keepalives
@@ -4634,7 +5092,7 @@ public class ApfFilter {
                 mLastInstalledProgram.length, filterAgeSeconds,
                 mLastInstalledProgramMinLifetime));
         pw.println();
-        pw.println("Mdns filters:");
+        pw.println("Mdns query filters:");
         pw.increaseIndent();
         if (mNumOfMdnsRuleToOffload == -1) {
             pw.println("pass all mDNS packet");
@@ -4648,6 +5106,17 @@ public class ApfFilter {
                             rule.mFullServiceName,
                             rule.mOffloadPayload == null ? 0 : rule.mOffloadPayload.length));
                 }
+            }
+        }
+        pw.decreaseIndent();
+        pw.println();
+        pw.println("Mdns reply allowed:");
+        pw.increaseIndent();
+        if (isIgnoreMdnsReplyFilter()) {
+            pw.println("pass all mDNS reply packets");
+        } else {
+            for (MdnsOffloadRule rule: mFilterRules) {
+                pw.println(String.format("allowed service: %s", rule.mFullServiceName));
             }
         }
         pw.decreaseIndent();
@@ -4698,6 +5167,25 @@ public class ApfFilter {
             }
         }
         pw.decreaseIndent();
+
+        if (enableHandleLowPowerStandbyPortsFilter()) {
+            pw.println("Low Power Standby ports filter: ENABLED");
+            pw.increaseIndent();
+            if (!mLowPowerStandbyPortsTcpLocal.isEmpty()
+                    || !mLowPowerStandbyPortsTcpRemote.isEmpty()
+                    || !mLowPowerStandbyPortsUdpLocal.isEmpty()
+                    || !mLowPowerStandbyPortsUdpRemote.isEmpty()) {
+                pw.println("allow TCP local ports: " + mLowPowerStandbyPortsTcpLocal);
+                pw.println("allow TCP remote ports: " + mLowPowerStandbyPortsTcpRemote);
+                pw.println("allow UDP local ports: " + mLowPowerStandbyPortsUdpLocal);
+                pw.println("allow UDP remote ports: " + mLowPowerStandbyPortsUdpRemote);
+            } else {
+                pw.println("no ports allowed");
+            }
+            pw.decreaseIndent();
+        } else {
+            pw.println("Low Power Standby ports filter: DISABLED");
+        }
 
         pw.println("Last program:");
         pw.increaseIndent();

@@ -33,7 +33,7 @@ import static com.android.net.module.util.netlink.NetlinkConstants.NLMSG_DONE;
 import static com.android.net.module.util.netlink.NetlinkConstants.SOCKDIAG_MSG_HEADER_SIZE;
 import static com.android.net.module.util.netlink.NetlinkConstants.SOCK_DIAG_BY_FAMILY;
 import static com.android.net.module.util.netlink.NetlinkUtils.DEFAULT_RECV_BUFSIZE;
-import static com.android.net.module.util.netlink.NetlinkUtils.IO_TIMEOUT_MS;
+import static com.android.net.module.util.netlink.NetlinkUtils.getIoTimeoutMs;
 import static com.android.networkstack.util.NetworkStackUtils.IGNORE_TCP_INFO_FOR_BLOCKED_UIDS;
 import static com.android.networkstack.util.NetworkStackUtils.SKIP_TCP_POLL_IN_LIGHT_DOZE;
 
@@ -50,6 +50,7 @@ import android.net.Network;
 import android.net.NetworkCapabilities;
 import android.os.AsyncTask;
 import android.os.Build;
+import android.os.Handler;
 import android.os.IBinder;
 import android.os.PowerManager;
 import android.os.RemoteException;
@@ -66,7 +67,6 @@ import android.util.SparseArray;
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
 
-import com.android.internal.annotations.GuardedBy;
 import com.android.internal.annotations.VisibleForTesting;
 import com.android.modules.utils.build.SdkLevel;
 import com.android.net.module.util.DeviceConfigUtils;
@@ -76,8 +76,6 @@ import com.android.net.module.util.netlink.NetlinkUtils;
 import com.android.net.module.util.netlink.StructInetDiagMsg;
 import com.android.net.module.util.netlink.StructNlAttr;
 import com.android.net.module.util.netlink.StructNlMsgHdr;
-import com.android.networkstack.apishim.NetworkShimImpl;
-import com.android.networkstack.apishim.common.UnsupportedApiLevelException;
 
 import java.io.FileDescriptor;
 import java.io.InterruptedIOException;
@@ -87,6 +85,7 @@ import java.nio.ByteBuffer;
 import java.util.ArrayList;
 import java.util.Base64;
 import java.util.List;
+import java.util.function.BiConsumer;
 
 /**
  * Class for NetworkStack to send a SockDiag request and parse the returned tcp info.
@@ -104,7 +103,7 @@ public class TcpSocketTracker {
      *
      *    Key: The idiag_cookie value of the socket. See struct inet_diag_sockid in
      *         &lt;linux_src&gt;/include/uapi/linux/inet_diag.h
-     *  Value: See {@Code SocketInfo}
+     *  Value: See {@code SocketInfo}
      */
     private final LongSparseArray<SocketInfo> mSocketInfos = new LongSparseArray<>();
     // Number of packets sent since the last received packet
@@ -120,7 +119,7 @@ public class TcpSocketTracker {
      * Request to send to kernel to request tcp info.
      *
      *   Key: Ip family type.
-     * Value: Bytes array represent the {@Code inetDiagReqV2}.
+     * Value: Bytes array represent the {@code inetDiagReqV2}.
      */
     private final SparseArray<byte[]> mSockDiagMsg = new SparseArray<>();
     private final Dependencies mDependencies;
@@ -133,10 +132,11 @@ public class TcpSocketTracker {
     private int mMinPacketsThreshold = DEFAULT_DATA_STALL_MIN_PACKETS_THRESHOLD;
     private int mTcpPacketsFailRateThreshold = DEFAULT_TCP_PACKETS_FAIL_PERCENTAGE;
 
+    // These variables are initialized when the NetworkMonitor enters DefaultState,
+    // and can only be accessed on the NetworkMonitor state machine thread after
+    // the NetworkMonitor state machine has been started.
     // TODO: Remove doze mode solution since uid networking blocked traffic is filtered out by
     //  the info provided by bpf maps.
-    private final Object mDozeModeLock = new Object();
-    @GuardedBy("mDozeModeLock")
     private boolean mInDozeMode = false;
 
     // These variables are initialized when the NetworkMonitor enters DefaultState,
@@ -180,25 +180,45 @@ public class TcpSocketTracker {
                 && ACTION_DEVICE_LIGHT_IDLE_MODE_CHANGED.equals(intent.getAction());
     }
 
-    final BroadcastReceiver mDeviceIdleReceiver = new BroadcastReceiver() {
-        @Override
-        @TargetApi(Build.VERSION_CODES.TIRAMISU)
-        public void onReceive(Context context, Intent intent) {
-            if (intent == null) return;
+    // This is only accessed on NetworkMonitor handler thread.
+    private DeferredBroadcastReceiver mDeviceIdleReceiver = null;
 
-            if (isDeviceIdleModeChangedAction(intent)
-                    || isDeviceLightIdleModeChangedAction(intent)) {
-                final PowerManager powerManager = context.getSystemService(PowerManager.class);
-                // For tcp polling mechanism, there is no difference between deep doze mode and
-                // light doze mode. The deep doze mode and light doze mode block networking
-                // for uids in the same way, use single variable to control.
-                final boolean deviceIdle = (mShouldDisableInDeepDoze
-                        && powerManager.isDeviceIdleMode())
-                        || (mShouldDisableInLightDoze && powerManager.isDeviceLightIdleMode());
-                setDozeMode(deviceIdle);
-            }
+    @TargetApi(Build.VERSION_CODES.TIRAMISU)
+    private void handleIdleModeIntent(Context context, Intent intent) {
+        if (intent == null) return;
+
+        if (isDeviceIdleModeChangedAction(intent)
+                || isDeviceLightIdleModeChangedAction(intent)) {
+            final PowerManager powerManager = context.getSystemService(PowerManager.class);
+            // For tcp polling mechanism, there is no difference between deep doze mode and
+            // light doze mode. The deep doze mode and light doze mode block networking
+            // for uids in the same way, use single variable to control.
+            final boolean deviceIdle = (mShouldDisableInDeepDoze
+                    && powerManager.isDeviceIdleMode())
+                    || (mShouldDisableInLightDoze && powerManager.isDeviceLightIdleMode());
+            setDozeMode(deviceIdle);
         }
-    };
+    }
+
+    /**
+     * A light-weighted {@link BroadcastReceiver} that dispatches the
+     * received {@link Intent} handling using a {@link Handler}.
+     */
+    private static class DeferredBroadcastReceiver extends BroadcastReceiver {
+        private final Handler mHandler;
+        private final BiConsumer<Context, Intent> mIntentConsumer;
+
+        DeferredBroadcastReceiver(@NonNull Handler handler,
+                                  @NonNull BiConsumer<Context, Intent> intentConsumer) {
+            mHandler = handler;
+            mIntentConsumer = intentConsumer;
+        }
+
+        @Override
+        public void onReceive(Context context, @NonNull Intent intent) {
+            mHandler.post(() -> mIntentConsumer.accept(context, intent));
+        }
+    }
 
     public TcpSocketTracker(@NonNull final Dependencies dps, @NonNull final Network network) {
         mDependencies = dps;
@@ -226,18 +246,29 @@ public class TcpSocketTracker {
                     family, InetDiagMessage.buildInetDiagReqForAliveTcpSockets(family));
         }
         mDependencies.addDeviceConfigChangedListener(mConfigListener);
+
+        mCm = mDependencies.getContext().getSystemService(ConnectivityManager.class);
+    }
+
+    /**
+     * Called from NetworkMonitor to notify NetworkMonitor is created.
+     * This is for initializing TcpSocketTracker from default state.
+     */
+    public void init(@NonNull final Handler handler, @NonNull LinkProperties lp,
+            @NonNull NetworkCapabilities nc) {
+        mDeviceIdleReceiver = new DeferredBroadcastReceiver(handler, this::handleIdleModeIntent);
         mDependencies.addDeviceIdleReceiver(mDeviceIdleReceiver, mShouldDisableInDeepDoze,
                 mShouldDisableInLightDoze);
-        mCm = mDependencies.getContext().getSystemService(ConnectivityManager.class);
+        setOpportunisticMode(false);
+        setLinkProperties(lp);
+        setNetworkCapabilities(nc);
     }
 
     @Nullable
     private MarkMaskParcel getNetworkMarkMask() {
         try {
-            final int netId = NetworkShimImpl.newInstance(mNetwork).getNetId();
+            final int netId = mNetwork.getNetId();
             return mNetd.getFwmarkForNetwork(netId);
-        } catch (UnsupportedApiLevelException e) {
-            logd("Get netId is not available in this API level.");
         } catch (RemoteException e) {
             loge("Error getting fwmark for network, ", e);
         }
@@ -248,15 +279,13 @@ public class TcpSocketTracker {
      * Request to send a SockDiag Netlink request. Receive and parse the returned message. This
      * function is not thread-safe and should only be called from only one thread.
      *
-     * @Return if this polling request is sent to kernel and executes successfully or not.
+     * @return if this polling request is sent to kernel and executes successfully or not.
      */
     public boolean pollSocketsInfo() {
         // Traffic will be restricted in doze mode. TCP info may not reflect the correct network
         // behavior.
         // TODO: Traffic may be restricted by other reason. Get the restriction info from bpf in T+.
-        synchronized (mDozeModeLock) {
-            if (mInDozeMode) return false;
-        }
+        if (mInDozeMode) return false;
 
         FileDescriptor fd = null;
 
@@ -464,10 +493,8 @@ public class TcpSocketTracker {
     public boolean isDataStallSuspected() {
         // Skip checking data stall since the traffic will be restricted and it will not be real
         // network stall.
-        // TODO: Traffic may be restricted by other reason. Get the restriction info from bpf in T+.
-        synchronized (mDozeModeLock) {
-            if (mInDozeMode) return false;
-        }
+        if (mInDozeMode) return false;
+
         final boolean ret = (getLatestPacketFailPercentage() >= getTcpPacketsFailRateThreshold());
         if (ret) {
             log("data stall suspected, uids: " + mLatestReportedUids.toString());
@@ -475,7 +502,7 @@ public class TcpSocketTracker {
         return ret;
     }
 
-    /** Calculate the change between the {@param current} and {@param previous}. */
+    /** Calculate the change between the {@code current} and {@code previous}. */
     @Nullable
     private TcpStat calculateLatestPacketsStat(@NonNull final SocketInfo current,
             @Nullable final SocketInfo previous) {
@@ -640,11 +667,9 @@ public class TcpSocketTracker {
     }
 
     private void setDozeMode(boolean isEnabled) {
-        synchronized (mDozeModeLock) {
-            if (mInDozeMode == isEnabled) return;
-            mInDozeMode = isEnabled;
-            logd("Doze mode enabled=" + mInDozeMode);
-        }
+        if (mInDozeMode == isEnabled) return;
+        mInDozeMode = isEnabled;
+        logd("Doze mode enabled=" + mInDozeMode);
     }
 
     public void setOpportunisticMode(boolean isEnabled) {
@@ -683,13 +708,13 @@ public class TcpSocketTracker {
             final FileDescriptor fd = NetlinkUtils.createNetLinkInetDiagSocket();
             NetlinkUtils.connectToKernel(fd);
             Os.setsockoptTimeval(fd, SOL_SOCKET, SO_SNDTIMEO,
-                    StructTimeval.fromMillis(IO_TIMEOUT_MS));
+                    StructTimeval.fromMillis(getIoTimeoutMs()));
             return fd;
         }
 
         /**
          * Send composed message request to kernel.
-         * @param fd see {@Code FileDescriptor}
+         * @param fd see {@code FileDescriptor}
          * @param msg the byte array represent the request message to write to kernel.
          *
          * Throw ErrnoException or InterruptedIOException if the exception is thrown.
@@ -717,7 +742,7 @@ public class TcpSocketTracker {
          */
         public ByteBuffer recvMessage(@NonNull final FileDescriptor fd)
                 throws ErrnoException, InterruptedIOException {
-            return NetlinkUtils.recvMessage(fd, DEFAULT_RECV_BUFSIZE, IO_TIMEOUT_MS);
+            return NetlinkUtils.recvMessage(fd, DEFAULT_RECV_BUFSIZE, getIoTimeoutMs());
         }
 
         public Context getContext() {

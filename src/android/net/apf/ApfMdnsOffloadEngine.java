@@ -46,10 +46,9 @@ public class ApfMdnsOffloadEngine implements OffloadEngine {
          * Called when the offload rules are updated.
          * <p>
          * This method is called on the handler thread.
-         *
-         * @param allRules The updated list of MDNS offload rules.
+         * @param allRules The updated MDNS rules.
          */
-        void onOffloadRulesUpdated(@NonNull List<MdnsOffloadRule> allRules);
+        void onOffloadRulesUpdated(@NonNull ApfMdnsUtils.MdnsRules allRules);
     }
 
     @NonNull
@@ -62,18 +61,21 @@ public class ApfMdnsOffloadEngine implements OffloadEngine {
     private final NsdManager mNsdManager;
     @NonNull
     private final Callback mCallback;
+    @NonNull
+    private final int mOffloadType;
     private final boolean mSkipMdnsRecordWithoutPriority;
 
     /**
      * Constructor for ApfOffloadEngine.
      */
     public ApfMdnsOffloadEngine(@NonNull String interfaceName, @NonNull Handler handler,
-            @NonNull NsdManager nsdManager, @NonNull Callback callback,
+            @NonNull NsdManager nsdManager, @NonNull Callback callback, @NonNull int offloadType,
             boolean skipMdnsRecordWithoutPriority) {
         mInterfaceName = interfaceName;
         mHandler = handler;
         mNsdManager = nsdManager;
         mCallback = callback;
+        mOffloadType = offloadType;
         mSkipMdnsRecordWithoutPriority = skipMdnsRecordWithoutPriority;
     }
 
@@ -101,9 +103,9 @@ public class ApfMdnsOffloadEngine implements OffloadEngine {
                                 && offloadServiceInfo.getPriority() == Integer.MAX_VALUE;
                         return !shouldSkip;
                     });
-            List<MdnsOffloadRule> offloadRules = ApfMdnsUtils.extractOffloadReplyRule(
-                    filteredOffloadServiceInfo);
-            mCallback.onOffloadRulesUpdated(offloadRules);
+            mCallback.onOffloadRulesUpdated(
+                    ApfMdnsUtils.extractRules(filteredOffloadServiceInfo)
+            );
         } catch (IOException e) {
             Log.e(TAG, "Failed to extract offload reply rule", e);
         }
@@ -113,7 +115,7 @@ public class ApfMdnsOffloadEngine implements OffloadEngine {
      * Registers the offload engine with the NsdManager.
      */
     public void registerOffloadEngine() {
-        mNsdManager.registerOffloadEngine(mInterfaceName, OFFLOAD_TYPE_REPLY,
+        mNsdManager.registerOffloadEngine(mInterfaceName, mOffloadType,
                 OFFLOAD_CAPABILITY_BYPASS_MULTICAST_LOCK, mHandler::post, this);
     }
 

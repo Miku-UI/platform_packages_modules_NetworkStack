@@ -49,9 +49,9 @@ import com.android.networkstack.NetworkStackNotifier.CHANNEL_CONNECTED
 import com.android.networkstack.NetworkStackNotifier.CHANNEL_VENUE_INFO
 import com.android.networkstack.NetworkStackNotifier.CONNECTED_NOTIFICATION_TIMEOUT_MS
 import com.android.networkstack.NetworkStackNotifier.Dependencies
-import com.android.networkstack.apishim.NetworkInformationShimImpl
-import com.android.modules.utils.build.SdkLevel.isAtLeastS
-import org.junit.Assume.assumeTrue
+import kotlin.reflect.KClass
+import kotlin.test.assertEquals
+import kotlin.test.assertTrue
 import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -65,9 +65,6 @@ import org.mockito.Mockito.any
 import org.mockito.Mockito.doReturn
 import org.mockito.Mockito.never
 import org.mockito.MockitoAnnotations
-import kotlin.reflect.KClass
-import kotlin.test.assertEquals
-import kotlin.test.assertTrue
 
 @RunWith(AndroidTestingRunner::class)
 @SmallTest
@@ -120,12 +117,13 @@ class NetworkStackNotifierTest {
                     .setCaptive(false)
                     .setVenueInfoUrl(Uri.parse(TEST_VENUE_INFO_URL))
                     .build()
-            val networkShim = NetworkInformationShimImpl.newInstance()
-            val captivePortalDataShim = networkShim.getCaptivePortalData(this)
+            val captivePortalData = getCaptivePortalData()
 
-            if (captivePortalDataShim != null) {
-                networkShim.setCaptivePortalData(this, captivePortalDataShim
-                        .withVenueFriendlyName(TEST_NETWORK_FRIENDLY_NAME))
+            if (captivePortalData != null) {
+                setCaptivePortalData(
+                    CaptivePortalData.Builder(captivePortalData)
+                        .setVenueFriendlyName(TEST_NETWORK_FRIENDLY_NAME).build()
+                )
             }
         }
     }
@@ -159,26 +157,41 @@ class NetworkStackNotifierTest {
         doReturn(realContext.packageName).`when`(mContext).packageName
 
         doReturn(mCurrentUserContext).`when`(mContext).createPackageContextAsUser(
-                realContext.packageName, 0, UserHandle.CURRENT)
+            realContext.packageName,
+            0,
+            UserHandle.CURRENT
+        )
         doReturn(mAllUserContext).`when`(mContext).createPackageContextAsUser(
-                realContext.packageName, 0, UserHandle.ALL)
+            realContext.packageName,
+            0,
+            UserHandle.ALL
+        )
 
         mAllUserContext.mockService(Context.NOTIFICATION_SERVICE, NotificationManager::class, mNm)
-        mContext.mockService(Context.NOTIFICATION_SERVICE, NotificationManager::class,
-                mNotificationChannelsNm)
+        mContext.mockService(
+            Context.NOTIFICATION_SERVICE,
+            NotificationManager::class,
+            mNotificationChannelsNm
+        )
         mContext.mockService(Context.CONNECTIVITY_SERVICE, ConnectivityManager::class, mCm)
 
         doReturn(NotificationChannel(CHANNEL_VENUE_INFO, "TestChannel", IMPORTANCE_DEFAULT))
                 .`when`(mNotificationChannelsNm).getNotificationChannel(CHANNEL_VENUE_INFO)
 
         doReturn(mPendingIntent).`when`(mDependencies).getActivityPendingIntent(
-                any(), any(), anyInt())
+            any(),
+            any(),
+            anyInt()
+        )
         mNotifier = NetworkStackNotifier(mContext, mLooper.looper, mDependencies)
         mHandler = mNotifier.handler
 
         val allNetworksCbCaptor = ArgumentCaptor.forClass(NetworkCallback::class.java)
-        verify(mCm).registerNetworkCallback(any() /* request */, allNetworksCbCaptor.capture(),
-                eq(mHandler))
+        verify(mCm).registerNetworkCallback(
+            any(),
+            allNetworksCbCaptor.capture(),
+            eq(mHandler)
+        )
         mAllNetworksCb = allNetworksCbCaptor.value
 
         val defaultNetworkCbCaptor = ArgumentCaptor.forClass(NetworkCallback::class.java)
@@ -212,8 +225,10 @@ class NetworkStackNotifierTest {
             "Connected notifications should be local only"
         )
         verify(mDependencies).getActivityPendingIntent(
-                eq(mCurrentUserContext), mIntentCaptor.capture(),
-                intThat { it or FLAG_IMMUTABLE != 0 })
+            eq(mCurrentUserContext),
+            mIntentCaptor.capture(),
+            intThat { it or FLAG_IMMUTABLE != 0 }
+        )
     }
 
     private fun verifyCanceledNotificationAfterNetworkLost() {
@@ -296,8 +311,10 @@ class NetworkStackNotifierTest {
 
         verify(mNm).notify(eq(TEST_NETWORK_TAG), mNoteIdCaptor.capture(), mNoteCaptor.capture())
         verify(mDependencies).getActivityPendingIntent(
-                eq(mCurrentUserContext), mIntentCaptor.capture(),
-                intThat { it or FLAG_IMMUTABLE != 0 })
+            eq(mCurrentUserContext),
+            mIntentCaptor.capture(),
+            intThat { it or FLAG_IMMUTABLE != 0 }
+        )
         verifyVenueInfoIntent(mIntentCaptor.value)
         assertTrue(
             mNoteCaptor.value.flags and Notification.FLAG_LOCAL_ONLY != 0,
@@ -347,7 +364,6 @@ class NetworkStackNotifierTest {
     @Test
     fun testConnectedVenueInfoWithFriendlyNameNotification() {
         // Venue info (CaptivePortalData) with friendly name is not available for API <= R
-        assumeTrue(isAtLeastS())
         mNotifier.notifyCaptivePortalValidationPending(TEST_NETWORK)
         onLinkPropertiesChanged(mTestCapportVenueUrlWithFriendlyNameLp)
         onDefaultNetworkAvailable(TEST_NETWORK)
@@ -361,8 +377,11 @@ class NetworkStackNotifierTest {
         verify(mResources).getString(R.string.tap_for_info)
         verify(mNm).notify(eq(TEST_NETWORK_TAG), mNoteIdCaptor.capture(), mNoteCaptor.capture())
         val note = mNoteCaptor.value
-        assertEquals(TEST_NETWORK_FRIENDLY_NAME, note.extras
-                .getCharSequence(Notification.EXTRA_TITLE))
+        assertEquals(
+            TEST_NETWORK_FRIENDLY_NAME,
+            note.extras
+                .getCharSequence(Notification.EXTRA_TITLE)
+        )
         verifyCanceledNotificationAfterDefaultNetworkLost()
     }
 

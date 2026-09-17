@@ -63,6 +63,7 @@ import static android.net.ip.IpClientLinkObserver.IpClientNetlinkMonitor;
 import static android.net.ip.IpClientLinkObserver.IpClientNetlinkMonitor.INetlinkMessageProcessor;
 import static android.net.ip.IpReachabilityMonitor.INVALID_REACHABILITY_LOSS_TYPE;
 import static android.net.ip.IpReachabilityMonitor.nudEventTypeToInt;
+import static android.net.ip.IpReachabilityMonitor.nudEventTypeToNetworkEvent;
 import static android.net.util.SocketUtils.makePacketSocketAddress;
 import static android.provider.DeviceConfig.NAMESPACE_CONNECTIVITY;
 import static android.stats.connectivity.NetworkQuirkEvent.QE_DHCP6_HEURISTIC_TRIGGERED;
@@ -83,13 +84,10 @@ import static com.android.net.module.util.NetworkStackConstants.ETHER_BROADCAST;
 import static com.android.net.module.util.NetworkStackConstants.IPV6_ADDR_ALL_ROUTERS_MULTICAST;
 import static com.android.net.module.util.NetworkStackConstants.RFC7421_PREFIX_LENGTH;
 import static com.android.net.module.util.NetworkStackConstants.VENDOR_SPECIFIC_IE_ID;
-import static com.android.networkstack.apishim.ConstantsShim.IFA_F_MANAGETEMPADDR;
-import static com.android.networkstack.apishim.ConstantsShim.IFA_F_NOPREFIXROUTE;
 import static com.android.networkstack.util.NetworkStackUtils.APF_ENABLE;
 import static com.android.networkstack.util.NetworkStackUtils.APF_HANDLE_ARP_OFFLOAD;
 import static com.android.networkstack.util.NetworkStackUtils.APF_HANDLE_IGMP_OFFLOAD;
 import static com.android.networkstack.util.NetworkStackUtils.APF_HANDLE_IGMP_OFFLOAD_VERSION;
-import static com.android.networkstack.util.NetworkStackUtils.APF_HANDLE_MDNS_ADVERTISING_OFFLOAD_VERSION;
 import static com.android.networkstack.util.NetworkStackUtils.APF_HANDLE_MLD_OFFLOAD;
 import static com.android.networkstack.util.NetworkStackUtils.APF_HANDLE_MLD_OFFLOAD_VERSION;
 import static com.android.networkstack.util.NetworkStackUtils.APF_HANDLE_ND_OFFLOAD;
@@ -99,14 +97,12 @@ import static com.android.networkstack.util.NetworkStackUtils.APF_HANDLE_PING6_O
 import static com.android.networkstack.util.NetworkStackUtils.APF_HANDLE_PING6_OFFLOAD_VERSION;
 import static com.android.networkstack.util.NetworkStackUtils.APF_POLLING_COUNTERS_VERSION;
 import static com.android.networkstack.util.NetworkStackUtils.IPCLIENT_DHCPV6_PD_PREFERRED_FLAG_VERSION;
-import static com.android.networkstack.util.NetworkStackUtils.IPCLIENT_IGNORE_LOW_RA_LIFETIME_VERSION;
 import static com.android.networkstack.util.NetworkStackUtils.IPCLIENT_REPLACE_NETD_WITH_NETLINK_VERSION;
 import static com.android.networkstack.util.NetworkStackUtils.IP_REACHABILITY_IGNORE_NUD_FAILURE_VERSION;
 import static com.android.networkstack.util.NetworkStackUtils.createInet6AddressFromEui64;
 import static com.android.networkstack.util.NetworkStackUtils.macAddressToEui64;
 import static com.android.server.util.PermissionUtil.enforceNetworkStackCallingPermission;
 
-import android.annotation.SuppressLint;
 import android.app.admin.DevicePolicyManager;
 import android.content.ComponentName;
 import android.content.Context;
@@ -129,6 +125,7 @@ import android.net.RouteInfo;
 import android.net.TcpKeepalivePacketDataParcelable;
 import android.net.Uri;
 import android.net.apf.ApfCapabilities;
+import android.net.apf.ApfController;
 import android.net.apf.ApfCounterTracker;
 import android.net.apf.ApfFilter;
 import android.net.dhcp.DhcpClient;
@@ -189,14 +186,12 @@ import com.android.net.module.util.InterfaceParams;
 import com.android.net.module.util.LinkPropertiesUtils;
 import com.android.net.module.util.SharedLog;
 import com.android.net.module.util.SocketUtils;
+import com.android.net.module.util.TerribleErrorLog;
 import com.android.net.module.util.arp.ArpPacket;
 import com.android.net.module.util.ip.InterfaceController;
 import com.android.net.module.util.netlink.NetlinkUtils;
 import com.android.net.module.util.structs.IaPrefixOption;
 import com.android.networkstack.R;
-import com.android.networkstack.apishim.NetworkInformationShimImpl;
-import com.android.networkstack.apishim.SocketUtilsShimImpl;
-import com.android.networkstack.apishim.common.NetworkInformationShim;
 import com.android.networkstack.mainline.beta.Flags;
 import com.android.networkstack.metrics.IpProvisioningMetrics;
 import com.android.networkstack.metrics.NetworkQuirkMetrics;
@@ -268,7 +263,6 @@ public class IpClient extends StateMachine {
     // This map holds Apf logs.
     private static final ConcurrentHashMap<String, SharedLog> sApfLogs = new ConcurrentHashMap<>();
     private final NetworkStackIpMemoryStore mIpMemoryStore;
-    private final NetworkInformationShim mShim = NetworkInformationShimImpl.newInstance();
     private final IpProvisioningMetrics mIpProvisioningMetrics = new IpProvisioningMetrics();
     private final NetworkQuirkMetrics mNetworkQuirkMetrics;
 
@@ -335,20 +329,16 @@ public class IpClient extends StateMachine {
         private final SharedLog mLog;
         @NonNull
         private final SharedLog mApfLog;
-        @NonNull
-        private final NetworkInformationShim mShim;
 
         private final boolean mApfDebug;
         private final Random mRandom = new Random();
 
         @VisibleForTesting
         protected IpClientCallbacksWrapper(IIpClientCallbacks callback, @NonNull SharedLog log,
-                @NonNull SharedLog apfLog, @NonNull NetworkInformationShim shim,
-                boolean apfDebug) {
+                @NonNull SharedLog apfLog, boolean apfDebug) {
             mCallback = callback;
             mLog = log;
             mApfLog = apfLog;
-            mShim = shim;
             mApfDebug = apfDebug;
         }
 
@@ -411,7 +401,7 @@ public class IpClient extends StateMachine {
                         NetworkStackStatsLog.CORE_NETWORKING_TERRIBLE_ERROR_OCCURRED__ERROR_TYPE__TYPE_UNKNOWN);
             }
             try {
-                mCallback.onProvisioningSuccess(mShim.makeSensitiveFieldsParcelingCopy(newLp));
+                mCallback.onProvisioningSuccess(new LinkProperties(newLp, true));
             } catch (RemoteException e) {
                 log("Failed to call onProvisioningSuccess", e);
             }
@@ -423,7 +413,7 @@ public class IpClient extends StateMachine {
         public void onProvisioningFailure(LinkProperties newLp) {
             log("onProvisioningFailure({" + newLp + "})");
             try {
-                mCallback.onProvisioningFailure(mShim.makeSensitiveFieldsParcelingCopy(newLp));
+                mCallback.onProvisioningFailure(new LinkProperties(newLp, true));
             } catch (RemoteException e) {
                 log("Failed to call onProvisioningFailure", e);
             }
@@ -435,7 +425,7 @@ public class IpClient extends StateMachine {
         public void onLinkPropertiesChange(LinkProperties newLp) {
             log("onLinkPropertiesChange({" + newLp + "})");
             try {
-                mCallback.onLinkPropertiesChange(mShim.makeSensitiveFieldsParcelingCopy(newLp));
+                mCallback.onLinkPropertiesChange(new LinkProperties(newLp, true));
             } catch (RemoteException e) {
                 log("Failed to call onLinkPropertiesChange", e);
             }
@@ -677,6 +667,9 @@ public class IpClient extends StateMachine {
     // IpClient shares a handler with DhcpClient: commands must not overlap
     public static final int DHCPCLIENT_CMD_BASE = 1000;
 
+    public static final int IFA_F_MANAGETEMPADDR = 0x100;
+    public static final int IFA_F_NOPREFIXROUTE = 0x200;
+
     // IpClient shares a handler with Dhcp6Client: commands must not overlap
     public static final int DHCP6CLIENT_CMD_BASE = 2000;
     private static final int DHCPV6_PREFIX_DELEGATION_ADDRESS_FLAGS =
@@ -867,6 +860,7 @@ public class IpClient extends StateMachine {
     private final boolean mApfHandleArpOffload;
     private final boolean mApfHandleNdOffload;
     private final boolean mApfHandleMdnsOffload;
+    private final boolean mApfHandleMdnsReplyFilter;
     private final boolean mApfHandleIgmpOffload;
     private final boolean mApfHandleMldOffload;
     private final boolean mApfHandleIpv4PingOffload;
@@ -1088,42 +1082,21 @@ public class IpClient extends StateMachine {
          */
         @Nullable
         public ApfCapabilities getApfCapabilities(String ifName, SharedLog log) {
-            try {
-                final long caps = NetworkStackUtils.getApfCapabilities(ifName);
-                if (caps < 0) return null;
-                // The lower 32 bits is the APF version, the upper 32 bit is the RAM size.
-                final int version = (int) caps;
-                final int size = (int) (caps >> 32);
-                return new ApfCapabilities(version, size, ARPHRD_ETHER);
-            } catch (ErrnoException e) {
-                log.e("[Non-HAL API] Cannot get APF capabilities: ", e);
-                return null;
-            }
+            return ApfController.getApfCapabilities(ifName, log);
         }
 
         /**
          * Install a packet filter on the specified interface through Non-HAL API.
          */
         public boolean installPacketFilter(String ifName, byte[] filter, SharedLog log) {
-            try {
-                NetworkStackUtils.installPacketFilter(ifName, filter);
-                return true;
-            } catch (ErrnoException e) {
-                log.e("[Non-HAL API] Failed to install packet filter", e);
-                return false;
-            }
+            return ApfController.installPacketFilter(ifName, filter, log);
         }
 
         /**
          * Read the packet filter RAM from the specified interface through Non-HAL API.
          */
         public boolean readPacketFilterRam(String ifName, byte[] output, SharedLog log) {
-            try {
-                return NetworkStackUtils.readPacketFilterRam(ifName, output);
-            } catch (ErrnoException e) {
-                log.e("[Non-HAL API] Failed to read packet filter RAM", e);
-                return false;
-            }
+            return ApfController.readPacketFilterRam(ifName, output, log);
         }
 
         /**
@@ -1167,7 +1140,7 @@ public class IpClient extends StateMachine {
         mApfLog = sApfLogs.get(mInterfaceName);
         mApfDebug = Log.isLoggable(ApfFilter.class.getSimpleName(), Log.DEBUG);
         mMsgStateLogger = new MessageHandlingLogger();
-        mCallback = new IpClientCallbacksWrapper(callback, mLog, mApfLog, mShim, mApfDebug);
+        mCallback = new IpClientCallbacksWrapper(callback, mLog, mApfLog, mApfDebug);
         mIpClientApfController = new ApfFilter.IApfController() {
             @Override
             public boolean installPacketFilter(byte[] filter, String filterConfig) {
@@ -1216,7 +1189,7 @@ public class IpClient extends StateMachine {
         // affect any behavior until the address registration feature is enabled. When that happens,
         // Dhcp6Client will use control message syscalls to receive DHCPv6 messages with ancillary
         // data, making the code safer to roll out along with mainline beta program.
-        mDhcp6AddressRegistrationEnabled = Flags.dhcpv6AddressRegistration();
+        mDhcp6AddressRegistrationEnabled = true;
         mDhcp6PacketDispatcher = new Dhcp6PacketDispatcher(getHandler(), ifName,
                 mDhcp6AddressRegistrationEnabled /* useControlMessageApi */);
         mDhcp6AddrRegTracker = mDependencies.makeDhcp6AddrRegTracker(
@@ -1230,8 +1203,8 @@ public class IpClient extends StateMachine {
         mEnableApfPollingCounters = mDependencies.isFeatureEnabled(context,
                 APF_POLLING_COUNTERS_VERSION);
         mIsAcceptRaMinLftEnabled =
-                SdkLevel.isAtLeastV() || mDependencies.isFeatureEnabled(context,
-                        IPCLIENT_IGNORE_LOW_RA_LIFETIME_VERSION);
+                SdkLevel.isAtLeastV()
+                        || com.android.networkstack.flags.Flags.ipclientIgnoreLowRaLifetime();
         mEnableApf = mDependencies.isFeatureNotChickenedOut(mContext, APF_ENABLE);
         mApfHandleArpOffload = mDependencies.isFeatureNotChickenedOut(
                 mContext, APF_HANDLE_ARP_OFFLOAD);
@@ -1240,8 +1213,11 @@ public class IpClient extends StateMachine {
         // TODO: turn on APF mDNS offload on handhelds.
         mIsTvDevice = context.getPackageManager().hasSystemFeature(FEATURE_LEANBACK);
         mApfHandleMdnsOffload =
-                SdkLevel.isAtLeastB() && (mIsTvDevice || mDependencies.isFeatureEnabled(context,
-                        APF_HANDLE_MDNS_ADVERTISING_OFFLOAD_VERSION));
+                SdkLevel.isAtLeastB() && (mIsTvDevice
+                        || com.android.networkstack.flags.Flags.apfHandleMdnsAdvertisingOffload());
+        mApfHandleMdnsReplyFilter =
+                SdkLevel.isAtLeastB()
+                    && com.android.networkstack.flags.Flags.apfHandleMdnsReplyFilter();
         mApfHandleIgmpOffload =
                 mDependencies.isFeatureNotChickenedOut(mContext, APF_HANDLE_IGMP_OFFLOAD)
                     && (SdkLevel.isAtLeastB()
@@ -1273,7 +1249,7 @@ public class IpClient extends StateMachine {
                 DEFAULT_NUD_FAILURE_COUNT_WEEKLY_THRESHOLD);
         mDhcp6PdPreferredFlagEnabled = mDependencies.isFeatureNotChickenedOut(mContext,
                 IPCLIENT_DHCPV6_PD_PREFERRED_FLAG_VERSION);
-        mReplaceNetdWithNetlinkEnabled = mDependencies.isFeatureEnabled(mContext,
+        mReplaceNetdWithNetlinkEnabled = mDependencies.isFeatureNotChickenedOut(mContext,
                 IPCLIENT_REPLACE_NETD_WITH_NETLINK_VERSION);
         IpClientLinkObserver.Configuration config = new IpClientLinkObserver.Configuration(
                 mAcceptRaMinLft,
@@ -2185,7 +2161,7 @@ public class IpClient extends StateMachine {
             newLp.addRoute(route);
         }
         addAllReachableDnsServers(newLp, netlinkLinkProperties.getDnsServers());
-        mShim.setNat64Prefix(newLp, mShim.getNat64Prefix(netlinkLinkProperties));
+        newLp.setNat64Prefix(netlinkLinkProperties.getNat64Prefix());
 
         // Check if any link address update from netlink.
         final CompareResult<LinkAddress> results =
@@ -2235,15 +2211,14 @@ public class IpClient extends StateMachine {
             }
 
             if (mDhcpResults.serverAddress != null) {
-                mShim.setDhcpServerAddress(newLp, mDhcpResults.serverAddress);
+                newLp.setDhcpServerAddress(mDhcpResults.serverAddress);
             }
 
             final String capportUrl = mDhcpResults.captivePortalApiUrl;
             // Uri.parse does no syntax check; do a simple check to eliminate garbage.
             // If the URL is still incorrect data fetching will fail later, which is fine.
             if (isParseableUrl(capportUrl)) {
-                NetworkInformationShimImpl.newInstance()
-                        .setCaptivePortalApiUrl(newLp, Uri.parse(capportUrl));
+                newLp.setCaptivePortalApiUrl(Uri.parse(capportUrl));
             }
             // TODO: also look at the IPv6 RA (netlink) for captive portal URL
         }
@@ -2343,7 +2318,7 @@ public class IpClient extends StateMachine {
         final ByteBuffer packet = NeighborAdvertisement.build(mInterfaceParams.macAddr, dstMac,
                 srcIp, dstIp, flags, targetIp);
         final SocketAddress sockAddress =
-                SocketUtilsShimImpl.newInstance().makePacketSocketAddress(ETH_P_IPV6,
+                makePacketSocketAddress(ETH_P_IPV6,
                         mInterfaceParams.index, dstMac.toByteArray());
 
         transmitPacket(packet, sockAddress, "Failed to send Gratuitous Neighbor Advertisement");
@@ -2367,7 +2342,7 @@ public class IpClient extends StateMachine {
         final ByteBuffer packet = NeighborSolicitation.build(mInterfaceParams.macAddr, dstMac,
                 srcIp, dstIp, targetIp);
         final SocketAddress sockAddress =
-                SocketUtilsShimImpl.newInstance().makePacketSocketAddress(ETH_P_IPV6,
+                makePacketSocketAddress(ETH_P_IPV6,
                         mInterfaceParams.index, dstMac.toByteArray());
 
         if (DBG) {
@@ -2682,7 +2657,6 @@ public class IpClient extends StateMachine {
         mCallback.onProvisioningFailure(mLinkProperties);
     }
 
-    @SuppressLint("NewApi") // TODO: b/193460475 remove once fixed
     private boolean startIPv4() {
         // If we have a StaticIpConfiguration attempt to apply it and
         // handle the result accordingly.
@@ -2774,12 +2748,16 @@ public class IpClient extends StateMachine {
                 >= mNudFailureCountDailyThreshold;
     }
 
+    private static boolean shouldSuppressNudFailure(int event) {
+        return event == NETWORK_EVENT_NUD_FAILURE_ORGANIC;
+    }
+
     private void maybeStoreNudFailureToDatabase(final NudEventType type) {
         if (!mIgnoreNudFailureEnabled) return;
-        final int event = IpReachabilityMonitor.nudEventTypeToNetworkEvent(type);
+        final int event = nudEventTypeToNetworkEvent(type);
         // So far only NUD failure events due to organic kernel check are stored, which can be
         // expanded to other causes later if necessary.
-        if (event != NETWORK_EVENT_NUD_FAILURE_ORGANIC) return;
+        if (!shouldSuppressNudFailure(event)) return;
         if (shouldStopWritingNudFailureEventToDatabase()) return;
 
         final long now = System.currentTimeMillis();
@@ -2810,8 +2788,9 @@ public class IpClient extends StateMachine {
                         @Override
                         public void notifyLost(String logMsg, NudEventType type) {
                             maybeStoreNudFailureToDatabase(type);
-                            // TODO: only ignore the organic NUD failures.
-                            if (mIgnoreNudFailure) {
+                            // Ignore only organic NUD failures if too many on a broken network.
+                            final int event = nudEventTypeToNetworkEvent(type);
+                            if (mIgnoreNudFailure && shouldSuppressNudFailure(event)) {
                                 mIpProvisioningMetrics.incrementIgnoredNudFailureCount();
                                 return;
                             }
@@ -3008,6 +2987,7 @@ public class IpClient extends StateMachine {
         apfConfig.handleArpOffload = mApfHandleArpOffload;
         apfConfig.handleNdOffload = mApfHandleNdOffload;
         apfConfig.handleMdnsOffload = mApfHandleMdnsOffload;
+        apfConfig.handleMdnsReplyFilter = mApfHandleMdnsReplyFilter;
         // In Android 16 for Android TV, the mDNS offload fail-open mechanism is not functional
         // due to the need to coexist with Wake on LAN filters. Specifically, during CPU
         // suspend, APF is used for offload, and the Wake on LAN filter exclusively decides if a
@@ -3357,6 +3337,11 @@ public class IpClient extends StateMachine {
             if (readyToProceed()) {
                 deferMessage(obtainMessage(CMD_ADDRESSES_CLEARED));
             } else {
+                TerribleErrorLog.logTerribleError(
+                        NetworkStackStatsLog::write,
+                        "There should not be any IP address left in LinkProperties now",
+                        NetworkStackStatsLog.CORE_NETWORKING_TERRIBLE_ERROR_OCCURRED,
+                        NetworkStackStatsLog.CORE_NETWORKING_TERRIBLE_ERROR_OCCURRED__ERROR_TYPE__TYPE_IP_ADDRESS_LEFT_IN_LINKPROPERTIES);
                 // Clear all IPv4 and IPv6 before proceeding to RunningState.
                 // Clean up any leftover state from an abnormal exit from
                 // tethering or during an IpClient restart.
@@ -3460,7 +3445,7 @@ public class IpClient extends StateMachine {
                 mProvisioningTimeoutAlarm.schedule(alarmTime);
             }
 
-            // There is no need to temporarlily lower the DTIM multiplier in IPv6 link-local
+            // There is no need to temporarily lower the DTIM multiplier in IPv6 link-local
             // only mode or when IPv6 is disabled.
             if (mConfiguration.mIPv6ProvisioningMode == PROV_IPV6_SLAAC) {
                 // Send a delay message to wait for IP provisioning to complete eventually and
@@ -3656,11 +3641,6 @@ public class IpClient extends StateMachine {
                         IpManagerEvent.ERROR_STARTING_IPREACHABILITYMONITOR);
                 enqueueJumpToStoppingState(DisconnectCode.DC_ERROR_STARTING_IPREACHABILITYMONITOR);
                 return;
-            }
-
-            // TODO: start the Dhcp6AddrRegTracker until M or O flag is detected.
-            if (mDhcp6AddressRegistrationEnabled) {
-                mDhcp6AddrRegTracker.start(mInterfaceParams, mLinkProperties);
             }
         }
 
@@ -4074,9 +4054,9 @@ public class IpClient extends StateMachine {
                     break;
 
                 case CMD_DHCP6_ADDR_REG_START:
-                    // TODO: fix M / O bit detection and start address registration tracker here.
-                    // This has not been working reliably across different kernels.
-                    Log.i(mTag, "M or O bit detected");
+                    if (mDhcp6AddressRegistrationEnabled) {
+                        mDhcp6AddrRegTracker.start(mInterfaceParams, mLinkProperties);
+                    }
                     break;
 
                 case Dhcp6Client.CMD_DHCP6_RESULT:
@@ -4127,7 +4107,7 @@ public class IpClient extends StateMachine {
 
                 case CMD_UPDATE_APF_DATA_SNAPSHOT:
                     if (mApfFilter != null) {
-                        // We prevents calls to readPacketFilterRam() when  mApfFilter is null.
+                        // We prevents calls to readPacketFilterRam() when mApfFilter is null.
                         // This is correct because any data read would be discarded when
                         // processing the EVENT_READ_PACKET_FILTER_COMPLETE event if no
                         // ApfFilter exists.

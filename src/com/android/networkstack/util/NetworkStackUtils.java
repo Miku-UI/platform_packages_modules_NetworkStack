@@ -157,11 +157,6 @@ public class NetworkStackUtils {
             new String [] {"https://www.google.com/generate_204"};
 
     /**
-     * Minimum module version at which to enable the DHCP Rapid Commit option.
-     */
-    public static final String DHCP_RAPID_COMMIT_VERSION = "dhcp_rapid_commit_version";
-
-    /**
      * Minimum module version at which to enable the IP address conflict detection feature.
      */
     public static final String DHCP_IP_CONFLICT_DETECT_VERSION = "dhcp_ip_conflict_detect_version";
@@ -192,13 +187,6 @@ public class NetworkStackUtils {
     public static final String VALIDATION_METRICS_VERSION = "validation_metrics_version";
 
     /**
-     * Experiment flag to enable "mcast_resolicit" neighbor parameter in IpReachabilityMonitor,
-     * set it to 3 by default.
-     */
-    public static final String IP_REACHABILITY_MCAST_RESOLICIT_VERSION =
-            "ip_reachability_mcast_resolicit_version";
-
-    /**
      * Experiment flag to treat router MAC address changes as a failure only on roam.
      */
     public static final String IP_REACHABILITY_ROUTER_MAC_CHANGE_FAILURE_ONLY_AFTER_ROAM_VERSION =
@@ -214,13 +202,6 @@ public class NetworkStackUtils {
      * Experiment flag to enable the feature of polling counters in Apf.
      */
     public static final String APF_POLLING_COUNTERS_VERSION = "apf_polling_counters_version";
-
-    /**
-     * Experiment flag to enable the feature of ignoring any individual RA section with lifetime
-     * below accept_ra_min_lft sysctl.
-     */
-    public static final String IPCLIENT_IGNORE_LOW_RA_LIFETIME_VERSION =
-            "ipclient_ignore_low_ra_lifetime_version";
 
     /**
      * Feature flag to send private DNS resolution queries and probes on a background thread.
@@ -239,12 +220,6 @@ public class NetworkStackUtils {
      */
     public static final String IPCLIENT_DHCPV6_PD_PREFERRED_FLAG_VERSION =
             "ipclient_dhcpv6_pd_preferred_flag_version";
-
-    /**
-     * Experiment flag to support the self-generated IPv6 address registration using DHCPv6.
-     */
-    public static final String IPCLIENT_DHCPV6_ADDR_REGISTER_VERSION =
-            "ipclient_dhcpv6_addr_register_version";
 
     /**
      * Experiment flag to replace INetd usage with netlink in IpClient.
@@ -287,12 +262,6 @@ public class NetworkStackUtils {
      */
     public static final String APF_HANDLE_MLD_OFFLOAD_VERSION =
             "apf_handle_mld_offload_version";
-
-    /**
-     * Experiment flag to enable the feature of handle MDNS advertising offload in Apf.
-     */
-    public static final String APF_HANDLE_MDNS_ADVERTISING_OFFLOAD_VERSION =
-            "apf_handle_mdns_advertising_offload_version";
 
     /**** BEGIN Feature Kill Switch Flags ****/
 

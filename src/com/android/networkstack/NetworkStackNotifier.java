@@ -26,6 +26,7 @@ import android.content.Context;
 import android.content.Intent;
 import android.content.pm.PackageManager;
 import android.content.res.Resources;
+import android.net.CaptivePortalData;
 import android.net.ConnectivityManager;
 import android.net.LinkProperties;
 import android.net.Network;
@@ -41,10 +42,6 @@ import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
 import androidx.annotation.StringRes;
 import androidx.annotation.VisibleForTesting;
-
-import com.android.networkstack.apishim.NetworkInformationShimImpl;
-import com.android.networkstack.apishim.common.CaptivePortalDataShim;
-import com.android.networkstack.apishim.common.NetworkInformationShim;
 
 import java.util.Hashtable;
 import java.util.function.Consumer;
@@ -62,8 +59,6 @@ public class NetworkStackNotifier {
     private final Hashtable<Network, TrackedNetworkStatus> mNetworkStatus = new Hashtable<>();
     @Nullable
     private Network mDefaultNetwork;
-    @NonNull
-    private final NetworkInformationShim mInfoShim = NetworkInformationShimImpl.newInstance();
 
     /**
      * The TrackedNetworkStatus object is a data class that keeps track of the relevant state of the
@@ -176,12 +171,14 @@ public class NetworkStackNotifier {
     }
 
     @Nullable
-    private CaptivePortalDataShim getCaptivePortalData(@NonNull TrackedNetworkStatus status) {
-        return mInfoShim.getCaptivePortalData(status.mLinkProperties);
+    private CaptivePortalData getCaptivePortalData(@NonNull TrackedNetworkStatus status) {
+        if (status.mLinkProperties == null) return null;
+        return status.mLinkProperties.getCaptivePortalData();
     }
 
     private String getSsid(@NonNull TrackedNetworkStatus status) {
-        return mInfoShim.getSsid(status.mNetworkCapabilities);
+        if (status.mNetworkCapabilities == null) return null;
+        return status.mNetworkCapabilities.getSsid();
     }
 
     private void updateNetworkStatus(@NonNull Network network,
@@ -198,7 +195,7 @@ public class NetworkStackNotifier {
         // Don't show the notification when SSID is unknown to prevent sending something vague to
         // the user.
         final boolean hasSsid = !TextUtils.isEmpty(getSsid(networkStatus));
-        final CaptivePortalDataShim capportData = getCaptivePortalData(networkStatus);
+        final CaptivePortalData capportData = getCaptivePortalData(networkStatus);
         final boolean showVenueInfo = capportData != null && capportData.getVenueInfoUrl() != null
                 // Only show venue info on validated networks, to prevent misuse of the notification
                 // as an alternate login flow that uses the default browser (which would be broken

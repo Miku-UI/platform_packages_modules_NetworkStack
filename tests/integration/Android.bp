@@ -68,10 +68,7 @@ android_library {
         "signature/**/*.java",
         "signature/**/*.kt",
     ],
-    min_sdk_version: select(release_flag("RELEASE_DEPRECATE_MAINLINE_R_SUPPORT"), {
-        true: "31",
-        default: "30",
-    }),
+    min_sdk_version: "31",
     static_libs: [
         "NetworkStackApiStableLib",
     ],
@@ -85,32 +82,6 @@ android_test {
         "NetworkStackIntegrationTestsJniDefaults",
     ],
     static_libs: ["NetworkStackIntegrationTestsLib"],
-    certificate: "networkstack",
-    platform_apis: true,
-    test_suites: ["device-tests"],
-    jarjar_rules: ":NetworkStackJarJarRules",
-    host_required: ["net-tests-utils-host-common"],
-    host_common_data: [
-        ":net-tests-utils-host-common",
-    ],
-    test_config_template: "AndroidTestTemplate_Integration.xml",
-}
-
-// Network stack next integration tests.
-android_test {
-    name: "NetworkStackNextIntegrationTests",
-    defaults: [
-        "NetworkStackIntegrationTestsDefaults",
-        "NetworkStackIntegrationTestsJniDefaults",
-        "ConnectivityNextEnableDefaults",
-    ],
-    srcs: [
-        "signature/**/*.java",
-        "signature/**/*.kt",
-    ],
-    static_libs: [
-        "NetworkStackApiStableLib",
-    ],
     certificate: "networkstack",
     platform_apis: true,
     test_suites: ["device-tests"],
